@@ -11,44 +11,30 @@ load_dotenv()
 
 def get_connection():
     try:
-        # Dokploy uses internal service names as hosts
         conn = psycopg2.connect(
-            host=os.getenv('DB_HOST', 'calendarnotes-calendarnotes-qiqn5q'),      
+            host=os.getenv('DB_HOST', 'postgres'),      
             database=os.getenv('DB_NAME', 'cal_notes'), 
             user=os.getenv('DB_USER', 'postgres'),
-            password=os.getenv('DP_PASS','P12345'),          
+            password=os.getenv('DB_PASS','P12345'),          
             port=os.getenv('DB_PORT', '5432'),          
             connect_timeout=5
         )
         return conn
     except Exception as e:
         st.error(f"❌ Database Connection Error: {e}")
-        
-        # Debugging helper for Dokploy
-        missing = []
-        if not os.getenv('DB_HOST'): missing.append('DB_HOST')
-        if not os.getenv('DB_PASSWORD'): missing.append('DB_PASSWORD')
-        if missing:
-            st.warning(f"Missing Env Vars in Dokploy: {', '.join(missing)}")
         return None
 
-# --- NEW: DATABASE INITIALIZATION ---
-# This creates your tables automatically if they were deleted
 def init_db():
     conn = get_connection()
     if conn:
         try:
             cur = conn.cursor()
-            # Create users table
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     id SERIAL PRIMARY KEY,
                     username TEXT UNIQUE NOT NULL,
                     password_hash TEXT NOT NULL
                 );
-            """)
-            # Create calendar_notes table
-            cur.execute("""
                 CREATE TABLE IF NOT EXISTS calendar_notes (
                     user_id INTEGER REFERENCES users(id),
                     note_date DATE NOT NULL,
@@ -132,19 +118,25 @@ def save_note(user_id, date_str, content):
 
 # --- APP LOGIC ---
 st.set_page_config(layout="wide", page_title="Secure Fluid Calendar")
-
-# Initialize Database on Startup
 init_db()
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
     st.session_state.user_id = None
 
-# --- LOGIN / REGISTRATION PAGE ---
+# --- CHECK FOR DATA FROM CALENDAR (NEW) ---
+# This part catches the data sent from the JavaScript
+params = st.query_params
+if "save_date" in params and "save_note" in params:
+    if st.session_state.authenticated:
+        save_note(st.session_state.user_id, params["save_date"], params["save_note"])
+        # Clear the URL so it doesn't save again on refresh
+        st.query_params.clear()
+        st.rerun()
+
 if not st.session_state.authenticated:
     st.title("📅 Calendar Login")
     tab1, tab2 = st.tabs(["Login", "Register"])
-    
     with tab1:
         u = st.text_input("Username", key="login_u")
         p = st.text_input("Password", type="password", key="login_p")
@@ -157,15 +149,13 @@ if not st.session_state.authenticated:
                 st.rerun()
             else:
                 st.error("Invalid credentials.")
-                
     with tab2:
         new_u = st.text_input("New Username")
         new_p = st.text_input("New Password", type="password")
         if st.button("Register"):
             if create_user(new_u, new_p):
-                st.success("Account created! Go to the Login tab.")
+                st.success("Account created! Go to Login.")
 
-# --- MAIN CALENDAR INTERFACE ---
 else:
     st.sidebar.title(f"User: {st.session_state.username}")
     if st.sidebar.button("Logout"):
@@ -201,10 +191,11 @@ else:
                     dateClick: function(info) {{
                         let note = prompt("Note for " + info.dateStr, notesData[info.dateStr] || "");
                         if (note !== null) {{
-                            window.parent.postMessage({{
-                                type: 'streamlit:setComponentValue',
-                                value: {{date: info.dateStr, note: note}}
-                            }}, '*');
+                            // FIX: Send data back via URL Query Parameters
+                            const url = new URL(window.parent.location.href);
+                            url.searchParams.set('save_date', info.dateStr);
+                            url.searchParams.set('save_note', note);
+                            window.parent.location.href = url.toString();
                         }}
                     }}
                 }});
@@ -214,9 +205,4 @@ else:
     </body>
     </html>
     """
-
-    result = components.html(calendar_html, height=750)
-
-    if result:
-        save_note(st.session_state.user_id, result['date'], result['note'])
-        st.rerun()
+    components.html(calendar_html, height=750)
