@@ -10,31 +10,34 @@ from dotenv import load_dotenv
 load_dotenv()
 
 def get_connection():
-    # Get variables
-    dbname = os.getenv("DB_NAME")
-    user = os.getenv("DB_USER")
-    password = os.getenv("DB_PASS")
-    host = os.getenv("DB_HOST")
-    port = os.getenv("DB_PORT")
+    # 1. Get variables
+    config = {
+        "DB_NAME": os.getenv("DB_NAME"),
+        "DB_USER": os.getenv("DB_USER"),
+        "DB_PASS": os.getenv("DB_PASS"),
+        "DB_HOST": os.getenv("DB_HOST"),
+        "DB_PORT": os.getenv("DB_PORT"),
+    }
 
-    # If any variable is missing, don't even try to connect
-    if not all([dbname, user, password, host, port]):
-        print("Missing DB environment variables.")
+    # 2. Identify exactly what is missing
+    missing = [k for k, v in config.items() if not v]
+    if missing:
+        st.error(f"Missing Variables in Dokploy: {', '.join(missing)}")
         return None
 
     try:
         return psycopg2.connect(
-            dbname=dbname,
-            user=user,
-            password=password,
-            host=host,
-            port=port,
-            connect_timeout=5 # Prevent the app from hanging forever
+            dbname=config["DB_NAME"],
+            user=config["DB_USER"],
+            password=config["DB_PASS"],
+            host=config["DB_HOST"],
+            port=config["DB_PORT"],
+            connect_timeout=5
         )
     except Exception as e:
-        # This prints to your Dokploy logs so you can see the real error
-        print(f"Database connection failed: {e}") 
+        st.error(f"Database Connection Failed: {e}")
         return None
+
 
 
 # --- SECURITY ---
