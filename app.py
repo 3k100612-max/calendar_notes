@@ -15,7 +15,7 @@ def get_connection():
         conn = psycopg2.connect(
             host=os.getenv('DB_HOST', 'postgres'),      
             database=os.getenv('DB_NAME', 'cal_notes'), 
-            user=os.getenv('DB_USER', 'postgres'),
+            user=os.getenv('DB_USER', 'user'),
             password=os.getenv('DB_PASSWORD'),          
             port=os.getenv('DB_PORT', '5432'),          
             connect_timeout=5
