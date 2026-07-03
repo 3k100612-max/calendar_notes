@@ -7,7 +7,6 @@ import os
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from fpdf import FPDF
-import io
 
 # --- LOAD ENVIRONMENT VARIABLES ---
 load_dotenv()
@@ -123,28 +122,26 @@ def save_note(user_id, date_str, content):
 def generate_pdf(user_name, notes, start_date, end_date):
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_font("Arial", "B", 16)
-    pdf.cell(200, 10, txt=f"Calendar Notes Report: {user_name}", ln=True, align='C')
-    pdf.set_font("Arial", "", 10)
-    pdf.cell(200, 10, txt=f"Range: {start_date} to {end_date}", ln=True, align='C')
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.cell(0, 10, txt=f"Calendar Notes: {user_name}", ln=True, align='C')
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(0, 10, txt=f"Period: {start_date} to {end_date}", ln=True, align='C')
     pdf.ln(10)
     
-    # Filter notes in range
     sorted_dates = sorted(notes.keys())
-    has_content = False
-    
+    found = False
     for d_str in sorted_dates:
         if start_date <= d_str <= end_date:
-            has_content = True
-            pdf.set_font("Arial", "B", 12)
+            found = True
+            pdf.set_font("Helvetica", "B", 12)
             pdf.cell(0, 10, txt=f"Date: {d_str}", ln=True)
-            pdf.set_font("Arial", "", 11)
+            pdf.set_font("Helvetica", "", 11)
             pdf.multi_cell(0, 7, txt=notes[d_str])
             pdf.ln(5)
             pdf.line(10, pdf.get_y(), 200, pdf.get_y())
             pdf.ln(5)
-            
-    if not has_content:
+    
+    if not found:
         pdf.cell(0, 10, txt="No notes found for this period.", ln=True)
         
     return pdf.output()
@@ -157,9 +154,9 @@ if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
     st.session_state.user_id = None
 
-# Handle URL parameters for editing
+# Handle URL parameters
 params = st.query_params
-selected_date = params.get("edit_date", None)
+selected_date = params.get("edit_date")
 
 if not st.session_state.authenticated:
     st.title("📅 Calendar Login")
@@ -184,119 +181,100 @@ if not st.session_state.authenticated:
                 st.success("Account created! Go to Login.")
 
 else:
-    # --- SIDEBAR: USER & EXPORT ---
+    # Sidebar
     st.sidebar.title(f"👤 {st.session_state.username}")
-    
-    # Export Section
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("📄 Export Notes")
-    export_type = st.sidebar.selectbox("Range", ["Daily", "Weekly", "Monthly"])
     
     notes = load_notes(st.session_state.user_id)
     
-    # Date calculations for export
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📄 PDF Export")
+    export_range = st.sidebar.selectbox("Range", ["Daily", "Weekly", "Monthly"])
+    
     today = datetime.now().date()
-    if export_type == "Daily":
-        s_date, e_date = str(today), str(today)
-    elif export_type == "Weekly":
-        s_date = str(today - timedelta(days=today.weekday()))
-        e_date = str(today + timedelta(days=(6 - today.weekday())))
+    if export_range == "Daily":
+        s, e = str(today), str(today)
+    elif export_range == "Weekly":
+        s = str(today - timedelta(days=today.weekday()))
+        e = str(today + timedelta(days=(6 - today.weekday())))
     else:
-        s_date = str(today.replace(day=1))
-        # Simple end of month logic
-        e_date = str((today.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1))
+        s = str(today.replace(day=1))
+        e = str((today.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1))
 
-    pdf_bytes = generate_pdf(st.session_state.username, notes, s_date, e_date)
-    st.sidebar.download_button(
-        label=f"Download {export_type} PDF",
-        data=pdf_bytes,
-        file_name=f"notes_{export_type.lower()}_{s_date}.pdf",
-        mime="application/pdf"
-    )
+    if st.sidebar.button("Generate PDF"):
+        pdf_data = generate_pdf(st.session_state.username, notes, s, e)
+        st.sidebar.download_button("Download PDF", data=pdf_data, file_name=f"notes_{s}.pdf")
 
     if st.sidebar.button("Logout"):
         st.session_state.authenticated = False
         st.query_params.clear()
         st.rerun()
 
-    # --- MAIN INTERFACE: EDITOR & CALENDAR ---
-    col1, col2 = st.columns([1, 3])
+    # Main UI
+    col_edit, col_cal = st.columns([1, 3])
 
-    with col1:
+    with col_edit:
         if selected_date:
-            st.subheader(f"📝 Edit: {selected_date}")
-            current_content = notes.get(selected_date, "")
-            new_note = st.text_area("Note Content", value=current_content, height=300)
+            st.subheader(f"📅 {selected_date}")
+            existing_text = notes.get(selected_date, "")
+            # MULTI-LINE TEXT FIELD
+            new_text = st.text_area("Your Note", value=existing_text, height=400)
             
-            c_save, c_cancel = st.columns(2)
-            if c_save.button("Save Note", use_container_width=True):
-                save_note(st.session_state.user_id, selected_date, new_note)
+            b1, b2 = st.columns(2)
+            if b1.button("💾 Save", use_container_width=True):
+                save_note(st.session_state.user_id, selected_date, new_text)
                 st.query_params.clear()
                 st.rerun()
-            if c_cancel.button("Cancel", use_container_width=True):
+            if b2.button("❌ Cancel", use_container_width=True):
                 st.query_params.clear()
                 st.rerun()
         else:
-            st.info("Click a date on the calendar to add or edit a multi-line note.")
-            # Display today's note if it exists
-            today_str = str(today)
-            if today_str in notes:
-                st.markdown(f"**Today's Note ({today_str}):**")
-                st.write(notes[today_str])
+            st.info("👈 Click a date on the calendar to view or add notes.")
 
-    with col2:
-        # Prepare events for FullCalendar
+    with col_cal:
         events = []
         for d, content in notes.items():
-            # Show first 30 chars in calendar, full note on click
-            display_title = (content[:30] + '...') if len(content) > 30 else content
             events.append({
-                "title": display_title,
+                "title": content[:25] + "..." if len(content) > 25 else content,
                 "start": d,
                 "allDay": True,
-                "backgroundColor": "#007bff",
-                "borderColor": "#0056b3"
+                "backgroundColor": "#007bff"
             })
 
-        calendar_html = f"""
+        # To avoid f-string syntax errors, we use a template and .replace()
+        calendar_template = """
         <!DOCTYPE html>
         <html>
         <head>
             <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.8/index.global.min.js'></script>
             <style>
-                #calendar {{ height: 80vh; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }}
-                .fc-event {{ cursor: pointer; }}
+                #calendar { height: 80vh; font-family: sans-serif; }
+                .fc-event { cursor: pointer; }
             </style>
         </head>
         <body>
             <div id='calendar'></div>
             <script>
-                document.addEventListener('DOMContentLoaded', function() {{
+                document.addEventListener('DOMContentLoaded', function() {
                     var calendarEl = document.getElementById('calendar');
-                    var calendar = new FullCalendar.Calendar(calendarEl, {{
+                    var calendar = new FullCalendar.Calendar(calendarEl, {
                         initialView: 'dayGridMonth',
-                        headerToolbar: {{
-                            left: 'prev,next today',
-                            center: 'title',
-                            right: 'dayGridMonth,timeGridWeek'
-                        }},
-                        events: {json.dumps(events)},
-                        dateClick: function(info) {{
+                        events: __EVENTS__,
+                        dateClick: function(info) {
                             const url = new URL(window.parent.location.href);
                             url.searchParams.set('edit_date', info.dateStr);
                             window.parent.location.href = url.toString();
-                        }},
-                        eventClick: function(info) {{
-                            const dateStr = info.event.startStr;
+                        },
+                        eventClick: function(info) {
                             const url = new URL(window.parent.location.href);
-                            url.searchParams.set('edit_date', dateStr);
+                            url.searchParams.set('edit_date', info.event.startStr);
                             window.parent.location.href = url.toString();
-                        }}
-                    }});
+                        }
+                    });
                     calendar.render();
-                }});
+                });
             </script>
         </body>
         </html>
-    
-        components.html(calendar_html, height=800)
+        """
+        html_to_render = calendar_template.replace("__EVENTS__", json.dumps(events))
+        components.html(html_to_render, height=800)
