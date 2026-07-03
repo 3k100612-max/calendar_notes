@@ -16,7 +16,7 @@ def get_connection():
             host=os.getenv('DB_HOST', 'calendarnotes-calendarnotes-qiqn5q'),      
             database=os.getenv('DB_NAME', 'cal_notes'), 
             user=os.getenv('DB_USER', 'postgres'),
-            password=os.getenv('P12345'),          
+            password=os.getenv('DP_PASS'),          
             port=os.getenv('DB_PORT', '5432'),          
             connect_timeout=5
         )
