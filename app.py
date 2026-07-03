@@ -298,5 +298,5 @@ else:
             </script>
         </body>
         </html>
-        """
+    
         components.html(calendar_html, height=800)
