@@ -147,19 +147,18 @@ def generate_pdf(user_name, notes, start_date, end_date):
     return bytes(pdf.output())
 
 # --- APP LOGIC ---
-st.set_page_config(layout="wide", page_title="Secure Fluid Calendar")
+st.set_page_config(layout="wide", page_title="Kim's Calendar Notes")
 init_db()
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
     st.session_state.user_id = None
 
-# 1. Get current date from URL (if clicked from calendar)
 params = st.query_params
 url_date = params.get("edit_date", None)
 
 if not st.session_state.authenticated:
-    st.title("📅 Calendar Login")
+    st.title("📅 Kim's Calendar Login")
     tab1, tab2 = st.tabs(["Login", "Register"])
     with tab1:
         u = st.text_input("Username", key="login_u")
@@ -179,6 +178,10 @@ if not st.session_state.authenticated:
         if st.button("Register"):
             if create_user(new_u, new_p):
                 st.success("Account created! Go to Login.")
+    
+    # Copyright on Login Page
+    st.markdown("---")
+    st.markdown("<div style='text-align: center; color: grey;'>© 2026 timothymarkbal-e</div>", unsafe_allow_html=True)
 
 else:
     # Sidebar
@@ -207,14 +210,16 @@ else:
         st.query_params.clear()
         st.rerun()
 
+    # Sidebar Copyright
+    st.sidebar.markdown("---")
+    st.sidebar.caption("© 2026 timothymarkbal-e")
+
     # Main UI
     col_edit, col_cal = st.columns([1, 3])
 
     with col_edit:
         st.subheader("📝 Note Editor")
         
-        # 2. Use a native Streamlit Date Input as a backup/primary selector
-        # If the URL has a date (from calendar click), use it. Otherwise use today.
         default_date = today
         if url_date:
             try:
@@ -225,15 +230,12 @@ else:
         active_date = st.date_input("Select Date to View/Edit", value=default_date)
         active_date_str = str(active_date)
         
-        # Load existing content for the selected date
         existing_text = notes.get(active_date_str, "")
-        
-        # MULTI-LINE TEXT FIELD
         new_text = st.text_area(f"Notes for {active_date_str}", value=existing_text, height=400)
         
         if st.button("💾 Save Note", use_container_width=True):
             save_note(st.session_state.user_id, active_date_str, new_text)
-            st.query_params.clear() # Clear URL to avoid confusion
+            st.query_params.clear() 
             st.success("Saved!")
             st.rerun()
             
@@ -272,14 +274,11 @@ else:
                         events: __EVENTS__,
                         dateClick: function(info) {
                             try {
-                                // Try to update parent URL
                                 const url = new URL(window.parent.location.href);
                                 url.searchParams.set('edit_date', info.dateStr);
                                 window.parent.location.href = url.toString();
                             } catch (e) {
-                                // Fallback if blocked: Just alert the user or log it
-                                console.log("URL Update blocked by browser security.");
-                                alert("Date Selected: " + info.dateStr + ". Please use the 'Select Date' box on the left to edit.");
+                                console.log("URL Update blocked.");
                             }
                         },
                         eventClick: function(info) {
@@ -300,3 +299,7 @@ else:
         """
         html_to_render = calendar_template.replace("__EVENTS__", json.dumps(events))
         components.html(html_to_render, height=800)
+
+    # Main Footer Copyright
+    st.markdown("---")
+    st.markdown("<div style='text-align: center; color: grey;'>© 2026 timothymarkbal-e</div>", unsafe_allow_html=True)
