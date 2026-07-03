@@ -10,35 +10,31 @@ from dotenv import load_dotenv
 load_dotenv()
 
 def get_connection():
-    # Use consistent naming: NAME, USER, PASS, HOST, PORT
-    config = {
-        "DB_NAME": os.getenv("DB_NAME"),
-        "DB_USER": os.getenv("DB_USER"),
-        "DB_PASS": os.getenv("DB_PASS"),
-        "DB_HOST": os.getenv("DB_HOST"),
-        "DB_PORT": os.getenv("DB_PORT"),
-    }
-
-    # 1. Check if any variables are missing in Dokploy
-    missing = [k for k, v in config.items() if not v]
-    if missing:
-        st.error(f"❌ Missing Environment Variables in Dokploy: {', '.join(missing)}")
-        st.info("Please add these keys in the Dokploy 'Environment' tab.")
-        return None
-
     try:
-        return psycopg2.connect(
-            dbname=config["DB_NAME"],
-            user=config["DB_USER"],
-            password=config["DB_PASS"],
-            host=config["DB_HOST"],
-            port=config["DB_PORT"],
+        # Mirroring your snippet's logic
+        conn = psycopg2.connect(
+            host=os.getenv('DB_HOST', 'postgres'),      # Default to 'postgres' for Dokploy
+            database=os.getenv('DB_NAME', 'cal_notes'), # Your DB name
+            user=os.getenv('DB_USER', 'postgres'),
+            password=os.getenv('DB_PASSWORD'),          # Changed to DB_PASSWORD
+            port=os.getenv('DB_PORT', '5432'),          # Added port for reliability
             connect_timeout=5
         )
+        return conn
     except Exception as e:
-        # 2. Show the real connection error (e.g., 'Connection Refused' or 'Invalid Password')
-        st.error(f"❌ Database Connection Failed: {e}")
+        # This part is crucial for Dokploy debugging
+        st.error(f"❌ Database Connection Error: {e}")
+        
+        # Check if variables are actually reaching the app
+        missing = []
+        if not os.getenv('DB_HOST'): missing.append('DB_HOST')
+        if not os.getenv('DB_PASSWORD'): missing.append('DB_PASSWORD')
+        
+        if missing:
+            st.warning(f"Note: These variables are missing in Dokploy: {', '.join(missing)}")
+            
         return None
+
 
 # --- SECURITY ---
 def hash_password(password):
