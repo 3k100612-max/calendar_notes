@@ -13,7 +13,7 @@ def get_connection():
     try:
         # Dokploy uses internal service names as hosts
         conn = psycopg2.connect(
-            host=os.getenv('DB_HOST', 'postgres'),      
+            host=os.getenv('DB_HOST', 'calendarnotes-calendarnotes-qiqn5q'),      
             database=os.getenv('DB_NAME', 'cal_notes'), 
             user=os.getenv('DB_USER', 'user'),
             password=os.getenv('DB_PASSWORD'),          
