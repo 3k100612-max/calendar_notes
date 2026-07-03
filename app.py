@@ -11,30 +11,56 @@ load_dotenv()
 
 def get_connection():
     try:
-        # Mirroring your snippet's logic
+        # Dokploy uses internal service names as hosts
         conn = psycopg2.connect(
-            host=os.getenv('DB_HOST', 'postgres'),      # Default to 'postgres' for Dokploy
-            database=os.getenv('DB_NAME', 'cal_notes'), # Your DB name
+            host=os.getenv('DB_HOST', 'postgres'),      
+            database=os.getenv('DB_NAME', 'cal_notes'), 
             user=os.getenv('DB_USER', 'postgres'),
-            password=os.getenv('DB_PASSWORD'),          # Changed to DB_PASSWORD
-            port=os.getenv('DB_PORT', '5432'),          # Added port for reliability
+            password=os.getenv('DB_PASSWORD'),          
+            port=os.getenv('DB_PORT', '5432'),          
             connect_timeout=5
         )
         return conn
     except Exception as e:
-        # This part is crucial for Dokploy debugging
         st.error(f"❌ Database Connection Error: {e}")
         
-        # Check if variables are actually reaching the app
+        # Debugging helper for Dokploy
         missing = []
         if not os.getenv('DB_HOST'): missing.append('DB_HOST')
         if not os.getenv('DB_PASSWORD'): missing.append('DB_PASSWORD')
-        
         if missing:
-            st.warning(f"Note: These variables are missing in Dokploy: {', '.join(missing)}")
-            
+            st.warning(f"Missing Env Vars in Dokploy: {', '.join(missing)}")
         return None
 
+# --- NEW: DATABASE INITIALIZATION ---
+# This creates your tables automatically if they were deleted
+def init_db():
+    conn = get_connection()
+    if conn:
+        try:
+            cur = conn.cursor()
+            # Create users table
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    username TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL
+                );
+            """)
+            # Create calendar_notes table
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS calendar_notes (
+                    user_id INTEGER REFERENCES users(id),
+                    note_date DATE NOT NULL,
+                    content TEXT,
+                    PRIMARY KEY (user_id, note_date)
+                );
+            """)
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            st.error(f"❌ Setup Error: {e}")
 
 # --- SECURITY ---
 def hash_password(password):
@@ -106,6 +132,9 @@ def save_note(user_id, date_str, content):
 
 # --- APP LOGIC ---
 st.set_page_config(layout="wide", page_title="Secure Fluid Calendar")
+
+# Initialize Database on Startup
+init_db()
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
