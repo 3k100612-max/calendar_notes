@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 def get_connection():
-    # 1. Get variables
+    # Use consistent naming: NAME, USER, PASS, HOST, PORT
     config = {
         "DB_NAME": os.getenv("DB_NAME"),
         "DB_USER": os.getenv("DB_USER"),
@@ -19,10 +19,11 @@ def get_connection():
         "DB_PORT": os.getenv("DB_PORT"),
     }
 
-    # 2. Identify exactly what is missing
+    # 1. Check if any variables are missing in Dokploy
     missing = [k for k, v in config.items() if not v]
     if missing:
-        st.error(f"Missing Variables in Dokploy: {', '.join(missing)}")
+        st.error(f"❌ Missing Environment Variables in Dokploy: {', '.join(missing)}")
+        st.info("Please add these keys in the Dokploy 'Environment' tab.")
         return None
 
     try:
@@ -35,10 +36,9 @@ def get_connection():
             connect_timeout=5
         )
     except Exception as e:
-        st.error(f"Database Connection Failed: {e}")
+        # 2. Show the real connection error (e.g., 'Connection Refused' or 'Invalid Password')
+        st.error(f"❌ Database Connection Failed: {e}")
         return None
-
-
 
 # --- SECURITY ---
 def hash_password(password):
@@ -47,20 +47,22 @@ def hash_password(password):
 def verify_user(username, password):
     conn = get_connection()
     if not conn: return None
-    cur = conn.cursor()
-    cur.execute("SELECT id, password_hash FROM users WHERE username = %s", (username,))
-    user = cur.fetchone()
-    cur.close()
-    conn.close()
-    if user and user[1] == hash_password(password):
-        return user[0]
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, password_hash FROM users WHERE username = %s", (username,))
+        user = cur.fetchone()
+        cur.close()
+        if user and user[1] == hash_password(password):
+            return user[0]
+    except Exception as e:
+        st.error(f"Login Error: {e}")
+    finally:
+        if conn: conn.close()
     return None
 
 def create_user(username, password):
     conn = get_connection()
-    if not conn: 
-        st.error("Could not connect to database. Check environment variables.")
-        return False
+    if not conn: return False
     try:
         cur = conn.cursor()
         cur.execute("INSERT INTO users (username, password_hash) VALUES (%s, %s)", 
@@ -69,41 +71,46 @@ def create_user(username, password):
         cur.close()
         return True
     except Exception as e:
-        # THIS WILL SHOW YOU THE REAL ERROR MESSAGE IN THE APP
-        st.error(f"Database Error: {e}")
+        st.error(f"Registration Error: {e}")
         return False
     finally:
-        conn.close()
-
+        if conn: conn.close()
 
 # --- DATA HANDLING ---
 def load_notes(user_id):
     conn = get_connection()
     if not conn: return {}
-    cur = conn.cursor()
-    cur.execute("SELECT note_date, content FROM calendar_notes WHERE user_id = %s", (user_id,))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return {str(row[0]): row[1] for row in rows}
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT note_date, content FROM calendar_notes WHERE user_id = %s", (user_id,))
+        rows = cur.fetchall()
+        cur.close()
+        return {str(row[0]): row[1] for row in rows}
+    except Exception:
+        return {}
+    finally:
+        if conn: conn.close()
 
 def save_note(user_id, date_str, content):
     conn = get_connection()
     if not conn: return
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO calendar_notes (user_id, note_date, content) 
-        VALUES (%s, %s, %s)
-        ON CONFLICT (user_id, note_date) DO UPDATE SET content = EXCLUDED.content;
-    """, (user_id, date_str, content))
-    conn.commit()
-    cur.close()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO calendar_notes (user_id, note_date, content) 
+            VALUES (%s, %s, %s)
+            ON CONFLICT (user_id, note_date) DO UPDATE SET content = EXCLUDED.content;
+        """, (user_id, date_str, content))
+        conn.commit()
+        cur.close()
+    except Exception as e:
+        st.error(f"Save Error: {e}")
+    finally:
+        if conn: conn.close()
 
 # --- APP LOGIC ---
 st.set_page_config(layout="wide", page_title="Secure Fluid Calendar")
 
-# Initialize session state
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
     st.session_state.user_id = None
@@ -132,8 +139,6 @@ if not st.session_state.authenticated:
         if st.button("Register"):
             if create_user(new_u, new_p):
                 st.success("Account created! Go to the Login tab.")
-            else:
-                st.error("Registration failed (Username might be taken).")
 
 # --- MAIN CALENDAR INTERFACE ---
 else:
@@ -144,7 +149,6 @@ else:
 
     notes = load_notes(st.session_state.user_id)
 
-    # FullCalendar JavaScript logic
     calendar_html = f"""
     <!DOCTYPE html>
     <html>
@@ -152,7 +156,6 @@ else:
         <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.8/index.global.min.js'></script>
         <style>
             #calendar {{ height: 85vh; font-family: 'Segoe UI', sans-serif; }}
-            .fc-header-toolbar {{ padding: 10px; }}
         </style>
     </head>
     <body>
@@ -161,22 +164,15 @@ else:
             document.addEventListener('DOMContentLoaded', function() {{
                 var calendarEl = document.getElementById('calendar');
                 var notesData = {json.dumps(notes)};
-                
                 var events = Object.keys(notesData).map(date => ({{
                     title: notesData[date],
                     start: date,
                     allDay: true,
                     backgroundColor: '#007bff'
                 }}));
-
                 var calendar = new FullCalendar.Calendar(calendarEl, {{
                     initialView: 'dayGridMonth',
                     events: events,
-                    headerToolbar: {{
-                        left: 'prev,next today',
-                        center: 'title',
-                        right: 'dayGridMonth,timeGridWeek'
-                    }},
                     dateClick: function(info) {{
                         let note = prompt("Note for " + info.dateStr, notesData[info.dateStr] || "");
                         if (note !== null) {{
@@ -196,7 +192,6 @@ else:
 
     result = components.html(calendar_html, height=750)
 
-    # If the user saved a note via the JS prompt
     if result:
         save_note(st.session_state.user_id, result['date'], result['note'])
         st.rerun()
