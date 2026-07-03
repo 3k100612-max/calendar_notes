@@ -55,7 +55,9 @@ def verify_user(username, password):
 
 def create_user(username, password):
     conn = get_connection()
-    if not conn: return False
+    if not conn: 
+        st.error("Could not connect to database. Check environment variables.")
+        return False
     try:
         cur = conn.cursor()
         cur.execute("INSERT INTO users (username, password_hash) VALUES (%s, %s)", 
@@ -64,9 +66,12 @@ def create_user(username, password):
         cur.close()
         return True
     except Exception as e:
+        # THIS WILL SHOW YOU THE REAL ERROR MESSAGE IN THE APP
+        st.error(f"Database Error: {e}")
         return False
     finally:
         conn.close()
+
 
 # --- DATA HANDLING ---
 def load_notes(user_id):
