@@ -131,12 +131,12 @@ def generate_pdf(user_name, notes, start_date, end_date):
     sorted_dates = sorted(notes.keys())
     found = False
     for d_str in sorted_dates:
-        if start_date <= d_str <= end_date:
+        if str(start_date) <= d_str <= str(end_date):
             found = True
             pdf.set_font("Helvetica", "B", 12)
             pdf.cell(0, 10, txt=f"Date: {d_str}", ln=True)
             pdf.set_font("Helvetica", "", 11)
-            pdf.multi_cell(0, 7, txt=notes[d_str])
+            pdf.multi_cell(0, 7, txt=str(notes[d_str]))
             pdf.ln(5)
             pdf.line(10, pdf.get_y(), 200, pdf.get_y())
             pdf.ln(5)
@@ -144,7 +144,7 @@ def generate_pdf(user_name, notes, start_date, end_date):
     if not found:
         pdf.cell(0, 10, txt="No notes found for this period.", ln=True)
         
-    return pdf.output()
+    return bytes(pdf.output())
 
 # --- APP LOGIC ---
 st.set_page_config(layout="wide", page_title="Secure Fluid Calendar")
@@ -154,9 +154,9 @@ if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
     st.session_state.user_id = None
 
-# Handle URL parameters
+# 1. Get current date from URL (if clicked from calendar)
 params = st.query_params
-selected_date = params.get("edit_date")
+url_date = params.get("edit_date", None)
 
 if not st.session_state.authenticated:
     st.title("📅 Calendar Login")
@@ -183,7 +183,6 @@ if not st.session_state.authenticated:
 else:
     # Sidebar
     st.sidebar.title(f"👤 {st.session_state.username}")
-    
     notes = load_notes(st.session_state.user_id)
     
     st.sidebar.markdown("---")
@@ -192,17 +191,16 @@ else:
     
     today = datetime.now().date()
     if export_range == "Daily":
-        s, e = str(today), str(today)
+        s, e = today, today
     elif export_range == "Weekly":
-        s = str(today - timedelta(days=today.weekday()))
-        e = str(today + timedelta(days=(6 - today.weekday())))
+        s = today - timedelta(days=today.weekday())
+        e = today + timedelta(days=(6 - today.weekday()))
     else:
-        s = str(today.replace(day=1))
-        e = str((today.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1))
+        s = today.replace(day=1)
+        e = (today.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
 
-    if st.sidebar.button("Generate PDF"):
-        pdf_data = generate_pdf(st.session_state.username, notes, s, e)
-        st.sidebar.download_button("Download PDF", data=pdf_data, file_name=f"notes_{s}.pdf")
+    pdf_data = generate_pdf(st.session_state.username, notes, s, e)
+    st.sidebar.download_button(f"Download {export_range} PDF", data=pdf_data, file_name=f"notes_{s}.pdf", mime="application/pdf")
 
     if st.sidebar.button("Logout"):
         st.session_state.authenticated = False
@@ -213,34 +211,47 @@ else:
     col_edit, col_cal = st.columns([1, 3])
 
     with col_edit:
-        if selected_date:
-            st.subheader(f"📅 {selected_date}")
-            existing_text = notes.get(selected_date, "")
-            # MULTI-LINE TEXT FIELD
-            new_text = st.text_area("Your Note", value=existing_text, height=400)
+        st.subheader("📝 Note Editor")
+        
+        # 2. Use a native Streamlit Date Input as a backup/primary selector
+        # If the URL has a date (from calendar click), use it. Otherwise use today.
+        default_date = today
+        if url_date:
+            try:
+                default_date = datetime.strptime(url_date, '%Y-%m-%d').date()
+            except:
+                pass
+        
+        active_date = st.date_input("Select Date to View/Edit", value=default_date)
+        active_date_str = str(active_date)
+        
+        # Load existing content for the selected date
+        existing_text = notes.get(active_date_str, "")
+        
+        # MULTI-LINE TEXT FIELD
+        new_text = st.text_area(f"Notes for {active_date_str}", value=existing_text, height=400)
+        
+        if st.button("💾 Save Note", use_container_width=True):
+            save_note(st.session_state.user_id, active_date_str, new_text)
+            st.query_params.clear() # Clear URL to avoid confusion
+            st.success("Saved!")
+            st.rerun()
             
-            b1, b2 = st.columns(2)
-            if b1.button("💾 Save", use_container_width=True):
-                save_note(st.session_state.user_id, selected_date, new_text)
-                st.query_params.clear()
-                st.rerun()
-            if b2.button("❌ Cancel", use_container_width=True):
-                st.query_params.clear()
-                st.rerun()
-        else:
-            st.info("👈 Click a date on the calendar to view or add notes.")
+        if url_date and st.button("Clear Selection"):
+            st.query_params.clear()
+            st.rerun()
 
     with col_cal:
         events = []
         for d, content in notes.items():
+            preview = content.split('\n')[0]
             events.append({
-                "title": content[:25] + "..." if len(content) > 25 else content,
+                "title": preview[:25] + "..." if len(preview) > 25 else preview,
                 "start": d,
                 "allDay": True,
                 "backgroundColor": "#007bff"
             })
 
-        # To avoid f-string syntax errors, we use a template and .replace()
         calendar_template = """
         <!DOCTYPE html>
         <html>
@@ -260,14 +271,25 @@ else:
                         initialView: 'dayGridMonth',
                         events: __EVENTS__,
                         dateClick: function(info) {
-                            const url = new URL(window.parent.location.href);
-                            url.searchParams.set('edit_date', info.dateStr);
-                            window.parent.location.href = url.toString();
+                            try {
+                                // Try to update parent URL
+                                const url = new URL(window.parent.location.href);
+                                url.searchParams.set('edit_date', info.dateStr);
+                                window.parent.location.href = url.toString();
+                            } catch (e) {
+                                // Fallback if blocked: Just alert the user or log it
+                                console.log("URL Update blocked by browser security.");
+                                alert("Date Selected: " + info.dateStr + ". Please use the 'Select Date' box on the left to edit.");
+                            }
                         },
                         eventClick: function(info) {
-                            const url = new URL(window.parent.location.href);
-                            url.searchParams.set('edit_date', info.event.startStr);
-                            window.parent.location.href = url.toString();
+                            try {
+                                const url = new URL(window.parent.location.href);
+                                url.searchParams.set('edit_date', info.event.startStr);
+                                window.parent.location.href = url.toString();
+                            } catch (e) {
+                                console.log("URL Update blocked.");
+                            }
                         }
                     });
                     calendar.render();
