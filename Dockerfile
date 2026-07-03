@@ -12,4 +12,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Use CMD in shell form to support the $PORT variable
-CMD streamlit run app.py --server.port ${PORT:-8502} --server.address 0.0.0.0
+CMD streamlit run app.py --server.port ${PORT:-8505} --server.address 0.0.0.0
