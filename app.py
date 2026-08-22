@@ -147,7 +147,7 @@ def generate_pdf(user_name, notes, start_date, end_date):
     return bytes(pdf.output())
 
 # --- APP LOGIC ---
-st.set_page_config(layout="wide", page_title="Kim's Calendar Notes")
+st.set_page_config(layout="wide", page_title="Tim's Calendar Notes")
 init_db()
 
 if "authenticated" not in st.session_state:
