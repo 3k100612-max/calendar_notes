@@ -1,15 +1,14 @@
 import os
-import re
-import html
 import hashlib
 import secrets
-from io import BytesIO
 from datetime import datetime
 
 import psycopg2
 import streamlit as st
 from dotenv import load_dotenv
-from fpdf import FPDF
+from streamlit_quill import st_quill
+from weasyprint import HTML
+
 
 
 # =========================================================
@@ -1119,6 +1118,60 @@ if selected_notebook:
                 st.success("Section created.")
                 st.rerun()
 
+QUILL_TOOLBAR = [
+    [
+        "bold",
+        "italic",
+        "underline",
+        "strike"
+    ],
+    [
+        {
+            "color": []
+        },
+        {
+            "background": []
+        }
+    ],
+    [
+        {
+            "header": [1, 2, 3, 4, 5, 6, False]
+        }
+    ],
+    [
+        {
+            "align": []
+        }
+    ],
+    [
+        {
+            "list": "ordered"
+        },
+        {
+            "list": "bullet"
+        }
+    ],
+    [
+        {
+            "indent": "-1"
+        },
+        {
+            "indent": "+1"
+        }
+    ],
+    [
+        "blockquote",
+        "code-block"
+    ],
+    [
+        "link"
+    ],
+    [
+        "clean"
+    ]
+]
+
+
 
 # =========================================================
 # MAIN APPLICATION
@@ -1228,7 +1281,7 @@ with top_col3:
 
 
 # =========================================================
-# EDITOR
+# RICH TEXT EDITOR
 # =========================================================
 
 title_input = st.text_input(
@@ -1237,65 +1290,53 @@ title_input = st.text_input(
     key=f"title_input_{page_id}"
 )
 
-content_input = st.text_area(
-    "Page content",
+st.caption(
+    "Use the toolbar to format text, add highlights, colors, headings, "
+    "lists, links, alignment, and indentation."
+)
+
+content_input = st_quill(
     value=page_content,
-    height=450,
-    key=f"content_input_{page_id}",
-    placeholder=(
-        "Write your page here...\n\n"
-        "Examples:\n"
-        "**Bold text**\n"
-        "==Yellow highlight==\n"
-        "!!Red highlight!!\n"
-        "##Green highlight##"
-    )
+    html=True,
+    key=f"quill_editor_{page_id}",
+    toolbar=QUILL_TOOLBAR,
+    placeholder="Start writing your page..."
 )
 
 
-format_col1, format_col2, format_col3, format_col4 = st.columns(4)
+# =========================================================
+# SAVE PAGE
+# =========================================================
 
-with format_col1:
-    if st.button("Add bold"):
-        st.session_state[f"content_input_{page_id}"] = (
-            f"**{content_input}**"
-        )
-        st.rerun()
-
-with format_col2:
-    if st.button("Yellow"):
-        st.session_state[f"content_input_{page_id}"] = highlight_text(
-            content_input,
-            "Yellow"
-        )
-        st.rerun()
-
-with format_col3:
-    if st.button("Red"):
-        st.session_state[f"content_input_{page_id}"] = highlight_text(
-            content_input,
-            "Red"
-        )
-        st.rerun()
-
-with format_col4:
-    if st.button("Green"):
-        st.session_state[f"content_input_{page_id}"] = highlight_text(
-            content_input,
-            "Green"
-        )
-        st.rerun()
-
-
-if st.session_state.get("save_page_clicked", False):
+if st.button(
+    "Save Page",
+    type="primary",
+    use_container_width=True
+):
     if save_page(
         page_id,
         title_input,
         content_input
     ):
-        st.session_state.save_page_clicked = False
-        st.success("Page saved.")
+        st.success("Page saved successfully.")
         st.rerun()
+
+
+# =========================================================
+# CONTENT PREVIEW
+# =========================================================
+
+st.subheader("Preview")
+
+st.markdown(
+    f"""
+    <div class="note-preview">
+        {content_input}
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
 
 
 # =========================================================
