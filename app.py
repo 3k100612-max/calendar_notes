@@ -1,6 +1,4 @@
 import os
-import hashlib
-import secrets
 from datetime import datetime
 
 import psycopg2
@@ -8,7 +6,6 @@ import streamlit as st
 from dotenv import load_dotenv
 from streamlit_quill import st_quill
 from weasyprint import HTML
-
 
 
 # =========================================================
@@ -19,8 +16,106 @@ load_dotenv()
 
 st.set_page_config(
     page_title="My Notebook",
-    page_icon="Notebook",
-    layout="wide"
+    page_icon="📓",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+
+# =========================================================
+# PAGE STYLE
+# =========================================================
+
+st.markdown(
+    """
+    <style>
+        [data-testid="stSidebar"] {
+            min-width: 300px;
+            max-width: 340px;
+        }
+
+        .notebook-header {
+            padding: 18px 22px;
+            border-radius: 12px;
+            background: linear-gradient(
+                135deg,
+                #2563eb,
+                #7c3aed
+            );
+            color: white;
+            margin-bottom: 20px;
+        }
+
+        .notebook-header h1 {
+            margin: 0;
+            font-size: 30px;
+        }
+
+        .notebook-header p {
+            margin: 5px 0 0 0;
+            opacity: 0.9;
+        }
+
+        .page-preview {
+            min-height: 300px;
+            padding: 24px;
+            border: 1px solid #d1d5db;
+            border-radius: 12px;
+            background-color: #ffffff;
+            color: #202124;
+            line-height: 1.7;
+            font-size: 16px;
+            overflow-wrap: anywhere;
+        }
+
+        .page-preview h1,
+        .page-preview h2,
+        .page-preview h3 {
+            color: #1f2937;
+        }
+
+        .page-preview blockquote {
+            border-left: 4px solid #9ca3af;
+            padding-left: 14px;
+            color: #4b5563;
+        }
+
+        .page-preview pre {
+            padding: 14px;
+            border-radius: 8px;
+            background-color: #f3f4f6;
+            white-space: pre-wrap;
+        }
+
+        .page-preview img {
+            max-width: 100%;
+            height: auto;
+        }
+
+        .page-preview a {
+            color: #2563eb;
+            text-decoration: underline;
+        }
+
+        .section-label {
+            color: #6b7280;
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+
+        .footer {
+            text-align: center;
+            color: #888888;
+            margin-top: 35px;
+            padding: 15px;
+        }
+
+        button[kind="secondary"] {
+            border-radius: 8px;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True
 )
 
 
@@ -46,7 +141,7 @@ def get_connection():
 def init_db():
     conn = get_connection()
 
-    if not conn:
+    if conn is None:
         return
 
     try:
@@ -91,54 +186,18 @@ def init_db():
 
         conn.commit()
         cur.close()
-        conn.close()
 
     except Exception as error:
         conn.rollback()
         st.error(f"Database setup error: {error}")
 
     finally:
-        if conn:
-            conn.close()
+        conn.close()
 
 
 # =========================================================
-# PASSWORD SECURITY
+# USER AUTHENTICATION
 # =========================================================
-
-def hash_password(password):
-    salt = secrets.token_bytes(16)
-
-    password_hash = hashlib.pbkdf2_hmac(
-        "sha256",
-        password.encode("utf-8"),
-        salt,
-        200_000
-    )
-
-    return f"{salt.hex()}${password_hash.hex()}"
-
-
-def verify_password(password, stored_password):
-    try:
-        salt_hex, hash_hex = stored_password.split("$")
-        salt = bytes.fromhex(salt_hex)
-
-        password_hash = hashlib.pbkdf2_hmac(
-            "sha256",
-            password.encode("utf-8"),
-            salt,
-            200_000
-        )
-
-        return secrets.compare_digest(
-            password_hash.hex(),
-            hash_hex
-        )
-
-    except Exception:
-        return False
-
 
 def create_user(username, password):
     username = username.strip()
@@ -153,7 +212,7 @@ def create_user(username, password):
 
     conn = get_connection()
 
-    if not conn:
+    if conn is None:
         return False
 
     try:
@@ -162,9 +221,9 @@ def create_user(username, password):
         cur.execute(
             """
             INSERT INTO users (username, password_hash)
-            VALUES (%s, %s)
+            VALUES (%s, crypt(%s, gen_salt('bf')))
             """,
-            (username, hash_password(password))
+            (username, password)
         )
 
         conn.commit()
@@ -189,7 +248,7 @@ def create_user(username, password):
 def login_user(username, password):
     conn = get_connection()
 
-    if not conn:
+    if conn is None:
         return None
 
     try:
@@ -197,39 +256,41 @@ def login_user(username, password):
 
         cur.execute(
             """
-            SELECT id, username, password_hash
+            SELECT id, username
             FROM users
             WHERE username = %s
+            AND password_hash = crypt(%s, password_hash)
             """,
-            (username.strip(),)
+            (username.strip(), password)
         )
 
         user = cur.fetchone()
         cur.close()
 
-        if user and verify_password(password, user[2]):
+        if user:
             return {
                 "id": user[0],
                 "username": user[1]
             }
 
+        return None
+
     except Exception as error:
         st.error(f"Login error: {error}")
+        return None
 
     finally:
         conn.close()
 
-    return None
-
 
 # =========================================================
-# NOTEBOOK FUNCTIONS
+# NOTEBOOK DATABASE FUNCTIONS
 # =========================================================
 
 def get_notebooks(user_id):
     conn = get_connection()
 
-    if not conn:
+    if conn is None:
         return []
 
     try:
@@ -245,10 +306,10 @@ def get_notebooks(user_id):
             (user_id,)
         )
 
-        notebooks = cur.fetchall()
+        rows = cur.fetchall()
         cur.close()
 
-        return notebooks
+        return rows
 
     finally:
         conn.close()
@@ -262,7 +323,7 @@ def create_notebook(user_id, name):
 
     conn = get_connection()
 
-    if not conn:
+    if conn is None:
         return None
 
     try:
@@ -278,7 +339,6 @@ def create_notebook(user_id, name):
         )
 
         notebook_id = cur.fetchone()[0]
-
         conn.commit()
         cur.close()
 
@@ -294,9 +354,14 @@ def create_notebook(user_id, name):
 
 
 def rename_notebook(notebook_id, name):
+    name = name.strip()
+
+    if not name:
+        return False
+
     conn = get_connection()
 
-    if not conn:
+    if conn is None:
         return False
 
     try:
@@ -308,7 +373,7 @@ def rename_notebook(notebook_id, name):
             SET name = %s
             WHERE id = %s
             """,
-            (name.strip(), notebook_id)
+            (name, notebook_id)
         )
 
         conn.commit()
@@ -323,7 +388,7 @@ def rename_notebook(notebook_id, name):
 def delete_notebook(notebook_id):
     conn = get_connection()
 
-    if not conn:
+    if conn is None:
         return False
 
     try:
@@ -346,14 +411,10 @@ def delete_notebook(notebook_id):
         conn.close()
 
 
-# =========================================================
-# SECTION FUNCTIONS
-# =========================================================
-
 def get_sections(notebook_id):
     conn = get_connection()
 
-    if not conn:
+    if conn is None:
         return []
 
     try:
@@ -369,10 +430,10 @@ def get_sections(notebook_id):
             (notebook_id,)
         )
 
-        sections = cur.fetchall()
+        rows = cur.fetchall()
         cur.close()
 
-        return sections
+        return rows
 
     finally:
         conn.close()
@@ -386,7 +447,7 @@ def create_section(notebook_id, name):
 
     conn = get_connection()
 
-    if not conn:
+    if conn is None:
         return None
 
     try:
@@ -402,7 +463,6 @@ def create_section(notebook_id, name):
         )
 
         section_id = cur.fetchone()[0]
-
         conn.commit()
         cur.close()
 
@@ -418,9 +478,14 @@ def create_section(notebook_id, name):
 
 
 def rename_section(section_id, name):
+    name = name.strip()
+
+    if not name:
+        return False
+
     conn = get_connection()
 
-    if not conn:
+    if conn is None:
         return False
 
     try:
@@ -432,7 +497,7 @@ def rename_section(section_id, name):
             SET name = %s
             WHERE id = %s
             """,
-            (name.strip(), section_id)
+            (name, section_id)
         )
 
         conn.commit()
@@ -447,7 +512,7 @@ def rename_section(section_id, name):
 def delete_section(section_id):
     conn = get_connection()
 
-    if not conn:
+    if conn is None:
         return False
 
     try:
@@ -470,14 +535,10 @@ def delete_section(section_id):
         conn.close()
 
 
-# =========================================================
-# PAGE FUNCTIONS
-# =========================================================
-
 def get_pages(section_id):
     conn = get_connection()
 
-    if not conn:
+    if conn is None:
         return []
 
     try:
@@ -493,10 +554,10 @@ def get_pages(section_id):
             (section_id,)
         )
 
-        pages = cur.fetchall()
+        rows = cur.fetchall()
         cur.close()
 
-        return pages
+        return rows
 
     finally:
         conn.close()
@@ -505,7 +566,7 @@ def get_pages(section_id):
 def get_page(page_id):
     conn = get_connection()
 
-    if not conn:
+    if conn is None:
         return None
 
     try:
@@ -513,17 +574,17 @@ def get_page(page_id):
 
         cur.execute(
             """
-            SELECT id, section_id, title, content, created_at, updated_at
+            SELECT id, section_id, title, content, updated_at
             FROM pages
             WHERE id = %s
             """,
             (page_id,)
         )
 
-        page = cur.fetchone()
+        row = cur.fetchone()
         cur.close()
 
-        return page
+        return row
 
     finally:
         conn.close()
@@ -532,7 +593,7 @@ def get_page(page_id):
 def create_page(section_id, title="Untitled Page"):
     conn = get_connection()
 
-    if not conn:
+    if conn is None:
         return None
 
     try:
@@ -548,7 +609,6 @@ def create_page(section_id, title="Untitled Page"):
         )
 
         page_id = cur.fetchone()[0]
-
         conn.commit()
         cur.close()
 
@@ -566,7 +626,7 @@ def create_page(section_id, title="Untitled Page"):
 def save_page(page_id, title, content):
     conn = get_connection()
 
-    if not conn:
+    if conn is None:
         return False
 
     try:
@@ -582,7 +642,7 @@ def save_page(page_id, title, content):
             """,
             (
                 title.strip() or "Untitled Page",
-                content,
+                content or "",
                 page_id
             )
         )
@@ -604,7 +664,7 @@ def save_page(page_id, title, content):
 def delete_page(page_id):
     conn = get_connection()
 
-    if not conn:
+    if conn is None:
         return False
 
     try:
@@ -627,16 +687,15 @@ def delete_page(page_id):
         conn.close()
 
 
-def search_pages(user_id, search_term):
+def search_pages(user_id, search_text):
     conn = get_connection()
 
-    if not conn:
+    if conn is None:
         return []
 
     try:
         cur = conn.cursor()
-
-        search_pattern = f"%{search_term}%"
+        pattern = f"%{search_text}%"
 
         cur.execute(
             """
@@ -657,466 +716,21 @@ def search_pages(user_id, search_term):
             )
             ORDER BY pages.updated_at DESC
             """,
-            (
-                user_id,
-                search_pattern,
-                search_pattern
-            )
+            (user_id, pattern, pattern)
         )
 
-        results = cur.fetchall()
+        rows = cur.fetchall()
         cur.close()
 
-        return results
+        return rows
 
     finally:
         conn.close()
 
 
 # =========================================================
-# TEXT FORMATTING
+# RICH TEXT EDITOR
 # =========================================================
-
-def remove_markup(text):
-    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
-    text = re.sub(r"==(.+?)==", r"\1", text)
-    text = re.sub(r"!!(.+?)!!", r"\1", text)
-    text = re.sub(r"##(.+?)##", r"\1", text)
-
-    return text
-
-
-def note_to_html(text):
-    safe_text = html.escape(text)
-
-    safe_text = re.sub(
-        r"\*\*(.+?)\*\*",
-        r"<strong>\1</strong>",
-        safe_text
-    )
-
-    safe_text = re.sub(
-        r"==(.+?)==",
-        r'<mark class="yellow">\1</mark>',
-        safe_text
-    )
-
-    safe_text = re.sub(
-        r"!!(.+?)!!",
-        r'<mark class="red">\1</mark>',
-        safe_text
-    )
-
-    safe_text = re.sub(
-        r"##(.+?)##",
-        r'<mark class="green">\1</mark>',
-        safe_text
-    )
-
-    return safe_text.replace("\n", "<br>")
-
-
-def highlight_text(text, color):
-    markers = {
-        "Yellow": ("==", "=="),
-        "Red": ("!!", "!!"),
-        "Green": ("##", "##")
-    }
-
-    start_marker, end_marker = markers[color]
-
-    if text.strip():
-        return f"{start_marker}{text}{end_marker}"
-
-    return text
-
-
-# =========================================================
-# PDF EXPORT
-# =========================================================
-
-def pdf_text(text):
-    text = remove_markup(text)
-
-    return (
-        text
-        .encode("latin-1", "replace")
-        .decode("latin-1")
-    )
-
-
-def build_page_pdf(username, title, content):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=15)
-
-    pdf.set_font("Helvetica", "B", 18)
-    pdf.cell(
-        0,
-        12,
-        pdf_text(title),
-        new_x="LMARGIN",
-        new_y="NEXT",
-        align="C"
-    )
-
-    pdf.set_font("Helvetica", "", 10)
-    pdf.cell(
-        0,
-        8,
-        f"Created for {pdf_text(username)}",
-        new_x="LMARGIN",
-        new_y="NEXT",
-        align="C"
-    )
-
-    pdf.ln(10)
-
-    pdf.set_font("Helvetica", "", 11)
-    pdf.multi_cell(
-        0,
-        7,
-        pdf_text(content)
-    )
-
-    return bytes(pdf.output())
-
-
-def build_section_pdf(username, section_name, pages):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=15)
-
-    pdf.set_font("Helvetica", "B", 18)
-    pdf.cell(
-        0,
-        12,
-        pdf_text(section_name),
-        new_x="LMARGIN",
-        new_y="NEXT",
-        align="C"
-    )
-
-    pdf.set_font("Helvetica", "", 10)
-    pdf.cell(
-        0,
-        8,
-        f"Created for {pdf_text(username)}",
-        new_x="LMARGIN",
-        new_y="NEXT",
-        align="C"
-    )
-
-    pdf.ln(10)
-
-    for page_id, title, updated_at in pages:
-        page = get_page(page_id)
-
-        if not page:
-            continue
-
-        content = page[3]
-
-        pdf.set_font("Helvetica", "B", 14)
-        pdf.cell(
-            0,
-            10,
-            pdf_text(title),
-            new_x="LMARGIN",
-            new_y="NEXT"
-        )
-
-        pdf.set_font("Helvetica", "", 11)
-        pdf.multi_cell(
-            0,
-            7,
-            pdf_text(content)
-        )
-
-        pdf.ln(8)
-
-        pdf.set_draw_color(180, 180, 180)
-        pdf.line(
-            10,
-            pdf.get_y(),
-            200,
-            pdf.get_y()
-        )
-
-        pdf.ln(8)
-
-    return bytes(pdf.output())
-
-
-# =========================================================
-# STYLING
-# =========================================================
-
-st.markdown(
-    """
-    <style>
-    .note-preview {
-        min-height: 300px;
-        padding: 20px;
-        border: 1px solid #d0d7de;
-        border-radius: 10px;
-        background-color: white;
-        color: #222222;
-        line-height: 1.8;
-        font-size: 16px;
-        overflow-wrap: anywhere;
-    }
-
-    mark {
-        padding: 3px 6px;
-        border-radius: 4px;
-    }
-
-    mark.yellow {
-        background-color: #fff176;
-    }
-
-    mark.red {
-        background-color: #ff9e9e;
-    }
-
-    mark.green {
-        background-color: #a5d6a7;
-    }
-
-    .page-card {
-        padding: 8px;
-        border-radius: 6px;
-        margin-bottom: 5px;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
-
-# =========================================================
-# INITIALIZE DATABASE
-# =========================================================
-
-init_db()
-
-
-# =========================================================
-# SESSION STATE
-# =========================================================
-
-if "user" not in st.session_state:
-    st.session_state.user = None
-
-if "selected_notebook" not in st.session_state:
-    st.session_state.selected_notebook = None
-
-if "selected_section" not in st.session_state:
-    st.session_state.selected_section = None
-
-if "selected_page" not in st.session_state:
-    st.session_state.selected_page = None
-
-
-# =========================================================
-# LOGIN SCREEN
-# =========================================================
-
-if st.session_state.user is None:
-
-    st.title("My Notebook")
-
-    login_tab, register_tab = st.tabs(
-        ["Login", "Register"]
-    )
-
-    with login_tab:
-        login_username = st.text_input(
-            "Username",
-            key="login_username"
-        )
-
-        login_password = st.text_input(
-            "Password",
-            type="password",
-            key="login_password"
-        )
-
-        if st.button(
-            "Login",
-            use_container_width=True
-        ):
-            user = login_user(
-                login_username,
-                login_password
-            )
-
-            if user:
-                st.session_state.user = user
-                st.rerun()
-            else:
-                st.error("Invalid username or password.")
-
-    with register_tab:
-        register_username = st.text_input(
-            "New username",
-            key="register_username"
-        )
-
-        register_password = st.text_input(
-            "New password",
-            type="password",
-            key="register_password"
-        )
-
-        confirm_password = st.text_input(
-            "Confirm password",
-            type="password",
-            key="confirm_password"
-        )
-
-        if st.button(
-            "Create Account",
-            use_container_width=True
-        ):
-            if register_password != confirm_password:
-                st.error("Passwords do not match.")
-            elif create_user(
-                register_username,
-                register_password
-            ):
-                st.success(
-                    "Account created. You can now log in."
-                )
-
-    st.stop()
-
-
-# =========================================================
-# CURRENT USER
-# =========================================================
-
-user_id = st.session_state.user["id"]
-username = st.session_state.user["username"]
-
-st.sidebar.title("My Notebook")
-st.sidebar.caption(f"Signed in as {username}")
-
-
-# =========================================================
-# NOTEBOOK SIDEBAR
-# =========================================================
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("Notebooks")
-
-notebooks = get_notebooks(user_id)
-
-notebook_names = {
-    notebook_id: notebook_name
-    for notebook_id, notebook_name in notebooks
-}
-
-if notebooks:
-    notebook_ids = list(notebook_names.keys())
-
-    if (
-        st.session_state.selected_notebook not in notebook_ids
-    ):
-        st.session_state.selected_notebook = notebook_ids[0]
-
-    selected_notebook = st.sidebar.selectbox(
-        "Select notebook",
-        options=notebook_ids,
-        format_func=lambda notebook_id: notebook_names[notebook_id],
-        index=notebook_ids.index(
-            st.session_state.selected_notebook
-        )
-    )
-
-    st.session_state.selected_notebook = selected_notebook
-
-else:
-    st.sidebar.info("No notebooks yet.")
-    selected_notebook = None
-
-
-with st.sidebar.expander("Create notebook"):
-    new_notebook_name = st.text_input(
-        "Notebook name",
-        key="new_notebook_name"
-    )
-
-    if st.button(
-        "Create notebook",
-        use_container_width=True
-    ):
-        notebook_id = create_notebook(
-            user_id,
-            new_notebook_name
-        )
-
-        if notebook_id:
-            st.session_state.selected_notebook = notebook_id
-            st.success("Notebook created.")
-            st.rerun()
-
-
-if selected_notebook:
-
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("Sections")
-
-    sections = get_sections(selected_notebook)
-
-    section_names = {
-        section_id: section_name
-        for section_id, section_name in sections
-    }
-
-    if sections:
-        section_ids = list(section_names.keys())
-
-        if (
-            st.session_state.selected_section not in section_ids
-        ):
-            st.session_state.selected_section = section_ids[0]
-
-        selected_section = st.sidebar.selectbox(
-            "Select section",
-            options=section_ids,
-            format_func=lambda section_id: section_names[section_id],
-            index=section_ids.index(
-                st.session_state.selected_section
-            )
-        )
-
-        st.session_state.selected_section = selected_section
-
-    else:
-        st.sidebar.info("No sections yet.")
-        selected_section = None
-
-    with st.sidebar.expander("Create section"):
-        new_section_name = st.text_input(
-            "Section name",
-            key="new_section_name"
-        )
-
-        if st.button(
-            "Create section",
-            use_container_width=True
-        ):
-            section_id = create_section(
-                selected_notebook,
-                new_section_name
-            )
-
-            if section_id:
-                st.session_state.selected_section = section_id
-                st.success("Section created.")
-                st.rerun()
 
 QUILL_TOOLBAR = [
     [
@@ -1164,46 +778,409 @@ QUILL_TOOLBAR = [
         "code-block"
     ],
     [
-        "link"
-    ],
-    [
+        "link",
         "clean"
     ]
 ]
 
 
+# =========================================================
+# PDF EXPORT
+# =========================================================
+
+def pdf_css():
+    return """
+    @page {
+        size: A4;
+        margin: 20mm 18mm 20mm 18mm;
+
+        @bottom-right {
+            content: "Page " counter(page);
+            font-size: 9pt;
+            color: #777777;
+        }
+    }
+
+    body {
+        font-family: Arial, sans-serif;
+        color: #222222;
+        font-size: 11pt;
+        line-height: 1.55;
+    }
+
+    h1 {
+        color: #1f2937;
+        font-size: 24pt;
+        margin-bottom: 4px;
+    }
+
+    h2 {
+        color: #374151;
+        font-size: 18pt;
+    }
+
+    h3 {
+        color: #4b5563;
+        font-size: 14pt;
+    }
+
+    .metadata {
+        color: #6b7280;
+        font-size: 9pt;
+        border-bottom: 1px solid #d1d5db;
+        padding-bottom: 10px;
+        margin-bottom: 20px;
+    }
+
+    blockquote {
+        border-left: 4px solid #9ca3af;
+        padding-left: 12px;
+        color: #4b5563;
+    }
+
+    pre {
+        background-color: #f3f4f6;
+        padding: 12px;
+        border-radius: 6px;
+        white-space: pre-wrap;
+    }
+
+    code {
+        background-color: #f3f4f6;
+        padding: 2px 4px;
+        border-radius: 3px;
+    }
+
+    img {
+        max-width: 100%;
+        height: auto;
+    }
+
+    .section-page {
+        page-break-after: always;
+    }
+
+    .section-page:last-child {
+        page-break-after: auto;
+    }
+    """
+
+
+def build_page_pdf(username, title, content):
+    document = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            {pdf_css()}
+        </style>
+    </head>
+    <body>
+        <h1>{title or "Untitled Page"}</h1>
+
+        <div class="metadata">
+            Created for {username}
+        </div>
+
+        <div>
+            {content or "<p>No content.</p>"}
+        </div>
+    </body>
+    </html>
+    """
+
+    return HTML(string=document).write_pdf()
+
+
+def build_section_pdf(username, section_name, pages):
+    pages_html = ""
+
+    for page_id, title, updated_at in pages:
+        page = get_page(page_id)
+
+        if not page:
+            continue
+
+        page_title = page[2] or "Untitled Page"
+        page_content = page[3] or ""
+
+        pages_html += f"""
+        <section class="section-page">
+            <h1>{page_title}</h1>
+
+            <div class="metadata">
+                Updated: {updated_at}
+            </div>
+
+            <div>
+                {page_content or "<p>No content.</p>"}
+            </div>
+        </section>
+        """
+
+    document = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            {pdf_css()}
+        </style>
+    </head>
+    <body>
+        <h1>{section_name}</h1>
+
+        <div class="metadata">
+            Created for {username}
+        </div>
+
+        {pages_html}
+    </body>
+    </html>
+    """
+
+    return HTML(string=document).write_pdf()
+
 
 # =========================================================
-# MAIN APPLICATION
+# INITIALIZATION
 # =========================================================
 
-if not selected_notebook or not selected_section:
+init_db()
 
-    st.title("My Notebook")
-    st.info(
-        "Create a notebook and a section from the sidebar to begin."
+if "user" not in st.session_state:
+    st.session_state.user = None
+
+if "selected_notebook" not in st.session_state:
+    st.session_state.selected_notebook = None
+
+if "selected_section" not in st.session_state:
+    st.session_state.selected_section = None
+
+if "selected_page" not in st.session_state:
+    st.session_state.selected_page = None
+
+
+# =========================================================
+# LOGIN PAGE
+# =========================================================
+
+if st.session_state.user is None:
+    st.markdown(
+        """
+        <div class="notebook-header">
+            <h1>My Notebook</h1>
+            <p>Your personal OneNote-style workspace</p>
+        </div>
+        """,
+        unsafe_allow_html=True
     )
+
+    login_tab, register_tab = st.tabs(
+        ["Login", "Register"]
+    )
+
+    with login_tab:
+        username = st.text_input(
+            "Username",
+            key="login_username"
+        )
+
+        password = st.text_input(
+            "Password",
+            type="password",
+            key="login_password"
+        )
+
+        if st.button(
+            "Login",
+            type="primary",
+            use_container_width=True
+        ):
+            user = login_user(username, password)
+
+            if user:
+                st.session_state.user = user
+                st.rerun()
+            else:
+                st.error("Invalid username or password.")
+
+    with register_tab:
+        new_username = st.text_input(
+            "New username",
+            key="new_username"
+        )
+
+        new_password = st.text_input(
+            "New password",
+            type="password",
+            key="new_password"
+        )
+
+        confirm_password = st.text_input(
+            "Confirm password",
+            type="password",
+            key="confirm_password"
+        )
+
+        if st.button(
+            "Create Account",
+            use_container_width=True
+        ):
+            if new_password != confirm_password:
+                st.error("Passwords do not match.")
+            elif create_user(new_username, new_password):
+                st.success(
+                    "Account created. You can now log in."
+                )
+
     st.stop()
 
 
 # =========================================================
-# PAGE LIST
+# USER INFORMATION
+# =========================================================
+
+user_id = st.session_state.user["id"]
+username = st.session_state.user["username"]
+
+
+# =========================================================
+# SIDEBAR: NOTEBOOKS
+# =========================================================
+
+st.sidebar.title("My Notebook")
+st.sidebar.caption(f"Signed in as {username}")
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("Notebooks")
+
+notebooks = get_notebooks(user_id)
+notebook_names = dict(notebooks)
+notebook_ids = list(notebook_names.keys())
+
+if notebook_ids:
+
+    if st.session_state.selected_notebook not in notebook_ids:
+        st.session_state.selected_notebook = notebook_ids[0]
+
+    selected_notebook = st.sidebar.selectbox(
+        "Choose notebook",
+        notebook_ids,
+        format_func=lambda value: notebook_names[value],
+        index=notebook_ids.index(
+            st.session_state.selected_notebook
+        )
+    )
+
+    st.session_state.selected_notebook = selected_notebook
+
+else:
+    selected_notebook = None
+    st.sidebar.info("Create your first notebook.")
+
+
+with st.sidebar.expander("Create notebook"):
+    notebook_name = st.text_input(
+        "Notebook name",
+        key="notebook_name"
+    )
+
+    if st.button(
+        "Create notebook",
+        use_container_width=True
+    ):
+        notebook_id = create_notebook(
+            user_id,
+            notebook_name
+        )
+
+        if notebook_id:
+            st.session_state.selected_notebook = notebook_id
+            st.rerun()
+
+
+if selected_notebook:
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Sections")
+
+    sections = get_sections(selected_notebook)
+    section_names = dict(sections)
+    section_ids = list(section_names.keys())
+
+    if section_ids:
+
+        if st.session_state.selected_section not in section_ids:
+            st.session_state.selected_section = section_ids[0]
+
+        selected_section = st.sidebar.selectbox(
+            "Choose section",
+            section_ids,
+            format_func=lambda value: section_names[value],
+            index=section_ids.index(
+                st.session_state.selected_section
+            )
+        )
+
+        st.session_state.selected_section = selected_section
+
+    else:
+        selected_section = None
+        st.sidebar.info("Create your first section.")
+
+    with st.sidebar.expander("Create section"):
+        section_name = st.text_input(
+            "Section name",
+            key="section_name"
+        )
+
+        if st.button(
+            "Create section",
+            use_container_width=True
+        ):
+            if selected_notebook:
+                section_id = create_section(
+                    selected_notebook,
+                    section_name
+                )
+
+                if section_id:
+                    st.session_state.selected_section = section_id
+                    st.rerun()
+
+
+# =========================================================
+# REQUIRE NOTEBOOK AND SECTION
+# =========================================================
+
+if not selected_notebook or not selected_section:
+    st.markdown(
+        """
+        <div class="notebook-header">
+            <h1>Welcome to My Notebook</h1>
+            <p>Create a notebook and section from the sidebar.</p>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.info(
+        "Use the sidebar to create a notebook and a section."
+    )
+
+    st.stop()
+
+
+# =========================================================
+# SIDEBAR: PAGES
 # =========================================================
 
 pages = get_pages(selected_section)
+page_ids = [page[0] for page in pages]
 
-page_map = {
-    page_id: title
-    for page_id, title, updated_at in pages
-}
-
-if pages:
-    page_ids = list(page_map.keys())
-
-    if st.session_state.selected_page not in page_ids:
-        st.session_state.selected_page = page_ids[0]
-
-else:
+if not page_ids:
     new_page_id = create_page(
         selected_section,
         "Welcome Page"
@@ -1212,18 +1189,17 @@ else:
     st.session_state.selected_page = new_page_id
     st.rerun()
 
+if st.session_state.selected_page not in page_ids:
+    st.session_state.selected_page = page_ids[0]
 
 with st.sidebar:
-
     st.markdown("---")
     st.subheader("Pages")
 
     for page_id, title, updated_at in pages:
-        label = title or "Untitled Page"
-
         if st.button(
-            label,
-            key=f"page_button_{page_id}",
+            title or "Untitled Page",
+            key=f"page_{page_id}",
             use_container_width=True
         ):
             st.session_state.selected_page = page_id
@@ -1244,13 +1220,13 @@ with st.sidebar:
 
 
 # =========================================================
-# PAGE CONTENT
+# CURRENT PAGE
 # =========================================================
 
 page = get_page(st.session_state.selected_page)
 
 if not page:
-    st.error("Page not found.")
+    st.error("The selected page could not be found.")
     st.stop()
 
 page_id = page[0]
@@ -1259,57 +1235,59 @@ page_content = page[3]
 
 
 # =========================================================
-# TOP BAR
+# PAGE HEADER
 # =========================================================
 
-top_col1, top_col2, top_col3 = st.columns(
-    [5, 1, 1]
+st.markdown(
+    f"""
+    <div class="section-label">
+        {notebook_names[selected_notebook]}
+        / {section_names[selected_section]}
+    </div>
+    """,
+    unsafe_allow_html=True
 )
 
-with top_col1:
+header_col1, header_col2 = st.columns([5, 1])
+
+with header_col1:
     st.title(page_title)
 
-with top_col2:
-    if st.button("Save"):
-        st.session_state.save_page_clicked = True
-
-with top_col3:
-    if st.button("Delete"):
+with header_col2:
+    if st.button(
+        "Delete page",
+        use_container_width=True
+    ):
         delete_page(page_id)
         st.session_state.selected_page = None
         st.rerun()
 
 
 # =========================================================
-# RICH TEXT EDITOR
+# PAGE EDITOR
 # =========================================================
 
 title_input = st.text_input(
     "Page title",
     value=page_title,
-    key=f"title_input_{page_id}"
+    key=f"title_{page_id}"
 )
 
 st.caption(
-    "Use the toolbar to format text, add highlights, colors, headings, "
-    "lists, links, alignment, and indentation."
+    "Use the toolbar to format text, add colors, highlights, "
+    "headings, lists, links, alignment, and indentation."
 )
 
 content_input = st_quill(
-    value=page_content,
+    value=page_content or "",
     html=True,
-    key=f"quill_editor_{page_id}",
     toolbar=QUILL_TOOLBAR,
-    placeholder="Start writing your page..."
+    placeholder="Start writing your page...",
+    key=f"editor_{page_id}"
 )
 
-
-# =========================================================
-# SAVE PAGE
-# =========================================================
-
 if st.button(
-    "Save Page",
+    "Save page",
     type="primary",
     use_container_width=True
 ):
@@ -1323,34 +1301,16 @@ if st.button(
 
 
 # =========================================================
-# CONTENT PREVIEW
-# =========================================================
-
-st.subheader("Preview")
-
-st.markdown(
-    f"""
-    <div class="note-preview">
-        {content_input}
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-
-
-
-# =========================================================
 # PREVIEW
 # =========================================================
 
+st.markdown("---")
 st.subheader("Preview")
-
-preview_html = note_to_html(content_input)
 
 st.markdown(
     f"""
-    <div class="note-preview">
-        {preview_html}
+    <div class="page-preview">
+        {content_input or "<p>Your page preview will appear here.</p>"}
     </div>
     """,
     unsafe_allow_html=True
@@ -1362,12 +1322,12 @@ st.markdown(
 # =========================================================
 
 st.markdown("---")
-st.subheader("Export")
+st.subheader("PDF Export")
 
-export_col1, export_col2 = st.columns(2)
+pdf_col1, pdf_col2 = st.columns(2)
 
-with export_col1:
-    page_pdf = build_page_pdf(
+with pdf_col1:
+    current_page_pdf = build_page_pdf(
         username,
         title_input,
         content_input
@@ -1375,23 +1335,24 @@ with export_col1:
 
     st.download_button(
         "Download current page PDF",
-        data=page_pdf,
-        file_name="page.pdf",
+        data=current_page_pdf,
+        file_name="current_page.pdf",
         mime="application/pdf",
         use_container_width=True
     )
 
-with export_col2:
+with pdf_col2:
     section_pages = get_pages(selected_section)
-    section_pdf = build_section_pdf(
+
+    complete_section_pdf = build_section_pdf(
         username,
         section_names[selected_section],
         section_pages
     )
 
     st.download_button(
-        "Download section PDF",
-        data=section_pdf,
+        "Download entire section PDF",
+        data=complete_section_pdf,
         file_name="section.pdf",
         mime="application/pdf",
         use_container_width=True
@@ -1405,24 +1366,29 @@ with export_col2:
 st.sidebar.markdown("---")
 st.sidebar.subheader("Search")
 
-search_term = st.sidebar.text_input(
+search_text = st.sidebar.text_input(
     "Search pages",
-    key="search_term"
+    key="search_text"
 )
 
-if search_term.strip():
-    results = search_pages(
+if search_text.strip():
+    search_results = search_pages(
         user_id,
-        search_term.strip()
+        search_text.strip()
     )
 
-    if results:
-        st.sidebar.markdown("Search results:")
+    if search_results:
+        st.sidebar.caption("Results:")
 
-        for result_page_id, result_title, result_section, result_notebook in results:
+        for result_page_id, result_title, result_section, result_notebook in search_results:
+            result_label = (
+                f"{result_title} "
+                f"({result_notebook} / {result_section})"
+            )
+
             if st.sidebar.button(
-                f"{result_title} - {result_section}",
-                key=f"search_result_{result_page_id}",
+                result_label,
+                key=f"result_{result_page_id}",
                 use_container_width=True
             ):
                 st.session_state.selected_page = result_page_id
@@ -1446,3 +1412,13 @@ if st.sidebar.button(
     st.session_state.selected_section = None
     st.session_state.selected_page = None
     st.rerun()
+
+
+st.markdown(
+    """
+    <div class="footer">
+        My Notebook
+    </div>
+    """,
+    unsafe_allow_html=True
+)
