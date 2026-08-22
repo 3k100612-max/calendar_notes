@@ -1,6 +1,7 @@
 import os
-from datetime import datetime
+from html import escape
 
+import bleach
 import psycopg2
 import streamlit as st
 from dotenv import load_dotenv
@@ -18,8 +19,51 @@ st.set_page_config(
     page_title="My Notebook",
     page_icon="📓",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
+
+
+# =========================================================
+# HTML SANITIZATION
+# =========================================================
+
+ALLOWED_TAGS = [
+    "p",
+    "br",
+    "strong",
+    "em",
+    "u",
+    "s",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "blockquote",
+    "pre",
+    "code",
+    "ol",
+    "ul",
+    "li",
+    "a",
+    "span",
+]
+
+ALLOWED_ATTRIBUTES = {
+    "a": ["href", "target", "rel"],
+    "span": ["style"],
+}
+
+
+def clean_html(value):
+    return bleach.clean(
+        value or "",
+        tags=ALLOWED_TAGS,
+        attributes=ALLOWED_ATTRIBUTES,
+        protocols=["http", "https", "mailto"],
+        strip=True,
+    )
 
 
 # =========================================================
@@ -37,11 +81,7 @@ st.markdown(
         .notebook-header {
             padding: 18px 22px;
             border-radius: 12px;
-            background: linear-gradient(
-                135deg,
-                #2563eb,
-                #7c3aed
-            );
+            background: linear-gradient(135deg, #2563eb, #7c3aed);
             color: white;
             margin-bottom: 20px;
         }
@@ -70,7 +110,10 @@ st.markdown(
 
         .page-preview h1,
         .page-preview h2,
-        .page-preview h3 {
+        .page-preview h3,
+        .page-preview h4,
+        .page-preview h5,
+        .page-preview h6 {
             color: #1f2937;
         }
 
@@ -109,29 +152,25 @@ st.markdown(
             margin-top: 35px;
             padding: 15px;
         }
-
-        button[kind="secondary"] {
-            border-radius: 8px;
-        }
     </style>
     """,
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
 
 # =========================================================
-# DATABASE CONNECTION
+# DATABASE
 # =========================================================
 
 def get_connection():
     try:
         return psycopg2.connect(
-            host=os.getenv("DB_HOST", "postgres"),
+            host=os.getenv("DB_HOST", "localhost"),
             database=os.getenv("DB_NAME", "cal_notes"),
             user=os.getenv("DB_USER", "postgres"),
             password=os.getenv("DB_PASSWORD", "P12345"),
             port=os.getenv("DB_PORT", "5432"),
-            connect_timeout=5
+            connect_timeout=5,
         )
     except Exception as error:
         st.error(f"Database connection error: {error}")
@@ -144,8 +183,15 @@ def init_db():
     if conn is None:
         return
 
+    cur = None
+
     try:
         cur = conn.cursor()
+
+        # Required for crypt() and gen_salt()
+        cur.execute(
+            "CREATE EXTENSION IF NOT EXISTS pgcrypto;"
+        )
 
         cur.execute(
             """
@@ -181,32 +227,45 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE INDEX IF NOT EXISTS idx_notebooks_user_id
+                ON notebooks(user_id);
+
+            CREATE INDEX IF NOT EXISTS idx_sections_notebook_id
+                ON sections(notebook_id);
+
+            CREATE INDEX IF NOT EXISTS idx_pages_section_id
+                ON pages(section_id);
+
+            CREATE INDEX IF NOT EXISTS idx_pages_updated_at
+                ON pages(updated_at);
             """
         )
 
         conn.commit()
-        cur.close()
 
     except Exception as error:
         conn.rollback()
         st.error(f"Database setup error: {error}")
 
     finally:
+        if cur:
+            cur.close()
         conn.close()
 
 
 # =========================================================
-# USER AUTHENTICATION
+# AUTHENTICATION
 # =========================================================
 
 def create_user(username, password):
-    username = username.strip()
+    username = (username or "").strip()
 
     if not username:
         st.error("Username cannot be empty.")
         return False
 
-    if len(password) < 6:
+    if len(password or "") < 6:
         st.error("Password must contain at least 6 characters.")
         return False
 
@@ -214,6 +273,8 @@ def create_user(username, password):
 
     if conn is None:
         return False
+
+    cur = None
 
     try:
         cur = conn.cursor()
@@ -223,12 +284,10 @@ def create_user(username, password):
             INSERT INTO users (username, password_hash)
             VALUES (%s, crypt(%s, gen_salt('bf')))
             """,
-            (username, password)
+            (username, password),
         )
 
         conn.commit()
-        cur.close()
-
         return True
 
     except psycopg2.errors.UniqueViolation:
@@ -242,6 +301,8 @@ def create_user(username, password):
         return False
 
     finally:
+        if cur:
+            cur.close()
         conn.close()
 
 
@@ -251,6 +312,8 @@ def login_user(username, password):
     if conn is None:
         return None
 
+    cur = None
+
     try:
         cur = conn.cursor()
 
@@ -259,18 +322,17 @@ def login_user(username, password):
             SELECT id, username
             FROM users
             WHERE username = %s
-            AND password_hash = crypt(%s, password_hash)
+              AND password_hash = crypt(%s, password_hash)
             """,
-            (username.strip(), password)
+            ((username or "").strip(), password),
         )
 
         user = cur.fetchone()
-        cur.close()
 
         if user:
             return {
                 "id": user[0],
-                "username": user[1]
+                "username": user[1],
             }
 
         return None
@@ -280,11 +342,13 @@ def login_user(username, password):
         return None
 
     finally:
+        if cur:
+            cur.close()
         conn.close()
 
 
 # =========================================================
-# NOTEBOOK DATABASE FUNCTIONS
+# NOTEBOOK FUNCTIONS
 # =========================================================
 
 def get_notebooks(user_id):
@@ -293,9 +357,10 @@ def get_notebooks(user_id):
     if conn is None:
         return []
 
+    cur = None
+
     try:
         cur = conn.cursor()
-
         cur.execute(
             """
             SELECT id, name
@@ -303,20 +368,18 @@ def get_notebooks(user_id):
             WHERE user_id = %s
             ORDER BY name
             """,
-            (user_id,)
+            (user_id,),
         )
-
-        rows = cur.fetchall()
-        cur.close()
-
-        return rows
+        return cur.fetchall()
 
     finally:
+        if cur:
+            cur.close()
         conn.close()
 
 
 def create_notebook(user_id, name):
-    name = name.strip()
+    name = (name or "").strip()
 
     if not name:
         return None
@@ -326,22 +389,21 @@ def create_notebook(user_id, name):
     if conn is None:
         return None
 
+    cur = None
+
     try:
         cur = conn.cursor()
-
         cur.execute(
             """
             INSERT INTO notebooks (user_id, name)
             VALUES (%s, %s)
             RETURNING id
             """,
-            (user_id, name)
+            (user_id, name),
         )
 
         notebook_id = cur.fetchone()[0]
         conn.commit()
-        cur.close()
-
         return notebook_id
 
     except Exception as error:
@@ -350,66 +412,42 @@ def create_notebook(user_id, name):
         return None
 
     finally:
+        if cur:
+            cur.close()
         conn.close()
 
 
-def rename_notebook(notebook_id, name):
-    name = name.strip()
-
-    if not name:
-        return False
-
+def delete_notebook(user_id, notebook_id):
     conn = get_connection()
 
     if conn is None:
         return False
 
-    try:
-        cur = conn.cursor()
-
-        cur.execute(
-            """
-            UPDATE notebooks
-            SET name = %s
-            WHERE id = %s
-            """,
-            (name, notebook_id)
-        )
-
-        conn.commit()
-        cur.close()
-
-        return True
-
-    finally:
-        conn.close()
-
-
-def delete_notebook(notebook_id):
-    conn = get_connection()
-
-    if conn is None:
-        return False
+    cur = None
 
     try:
         cur = conn.cursor()
-
         cur.execute(
             """
             DELETE FROM notebooks
             WHERE id = %s
+              AND user_id = %s
             """,
-            (notebook_id,)
+            (notebook_id, user_id),
         )
 
         conn.commit()
-        cur.close()
-
-        return True
+        return cur.rowcount > 0
 
     finally:
+        if cur:
+            cur.close()
         conn.close()
 
+
+# =========================================================
+# SECTION FUNCTIONS
+# =========================================================
 
 def get_sections(notebook_id):
     conn = get_connection()
@@ -417,9 +455,10 @@ def get_sections(notebook_id):
     if conn is None:
         return []
 
+    cur = None
+
     try:
         cur = conn.cursor()
-
         cur.execute(
             """
             SELECT id, name
@@ -427,20 +466,18 @@ def get_sections(notebook_id):
             WHERE notebook_id = %s
             ORDER BY name
             """,
-            (notebook_id,)
+            (notebook_id,),
         )
-
-        rows = cur.fetchall()
-        cur.close()
-
-        return rows
+        return cur.fetchall()
 
     finally:
+        if cur:
+            cur.close()
         conn.close()
 
 
 def create_section(notebook_id, name):
-    name = name.strip()
+    name = (name or "").strip()
 
     if not name:
         return None
@@ -450,22 +487,21 @@ def create_section(notebook_id, name):
     if conn is None:
         return None
 
+    cur = None
+
     try:
         cur = conn.cursor()
-
         cur.execute(
             """
             INSERT INTO sections (notebook_id, name)
             VALUES (%s, %s)
             RETURNING id
             """,
-            (notebook_id, name)
+            (notebook_id, name),
         )
 
         section_id = cur.fetchone()[0]
         conn.commit()
-        cur.close()
-
         return section_id
 
     except Exception as error:
@@ -474,38 +510,8 @@ def create_section(notebook_id, name):
         return None
 
     finally:
-        conn.close()
-
-
-def rename_section(section_id, name):
-    name = name.strip()
-
-    if not name:
-        return False
-
-    conn = get_connection()
-
-    if conn is None:
-        return False
-
-    try:
-        cur = conn.cursor()
-
-        cur.execute(
-            """
-            UPDATE sections
-            SET name = %s
-            WHERE id = %s
-            """,
-            (name, section_id)
-        )
-
-        conn.commit()
-        cur.close()
-
-        return True
-
-    finally:
+        if cur:
+            cur.close()
         conn.close()
 
 
@@ -515,25 +521,30 @@ def delete_section(section_id):
     if conn is None:
         return False
 
+    cur = None
+
     try:
         cur = conn.cursor()
-
         cur.execute(
             """
             DELETE FROM sections
             WHERE id = %s
             """,
-            (section_id,)
+            (section_id,),
         )
 
         conn.commit()
-        cur.close()
-
-        return True
+        return cur.rowcount > 0
 
     finally:
+        if cur:
+            cur.close()
         conn.close()
 
+
+# =========================================================
+# PAGE FUNCTIONS
+# =========================================================
 
 def get_pages(section_id):
     conn = get_connection()
@@ -541,9 +552,10 @@ def get_pages(section_id):
     if conn is None:
         return []
 
+    cur = None
+
     try:
         cur = conn.cursor()
-
         cur.execute(
             """
             SELECT id, title, updated_at
@@ -551,15 +563,13 @@ def get_pages(section_id):
             WHERE section_id = %s
             ORDER BY updated_at DESC
             """,
-            (section_id,)
+            (section_id,),
         )
-
-        rows = cur.fetchall()
-        cur.close()
-
-        return rows
+        return cur.fetchall()
 
     finally:
+        if cur:
+            cur.close()
         conn.close()
 
 
@@ -569,24 +579,23 @@ def get_page(page_id):
     if conn is None:
         return None
 
+    cur = None
+
     try:
         cur = conn.cursor()
-
         cur.execute(
             """
             SELECT id, section_id, title, content, updated_at
             FROM pages
             WHERE id = %s
             """,
-            (page_id,)
+            (page_id,),
         )
-
-        row = cur.fetchone()
-        cur.close()
-
-        return row
+        return cur.fetchone()
 
     finally:
+        if cur:
+            cur.close()
         conn.close()
 
 
@@ -596,8 +605,11 @@ def create_page(section_id, title="Untitled Page"):
     if conn is None:
         return None
 
+    cur = None
+
     try:
         cur = conn.cursor()
+        safe_title = (title or "").strip() or "Untitled Page"
 
         cur.execute(
             """
@@ -605,13 +617,11 @@ def create_page(section_id, title="Untitled Page"):
             VALUES (%s, %s, '')
             RETURNING id
             """,
-            (section_id, title.strip() or "Untitled Page")
+            (section_id, safe_title),
         )
 
         page_id = cur.fetchone()[0]
         conn.commit()
-        cur.close()
-
         return page_id
 
     except Exception as error:
@@ -620,6 +630,8 @@ def create_page(section_id, title="Untitled Page"):
         return None
 
     finally:
+        if cur:
+            cur.close()
         conn.close()
 
 
@@ -629,8 +641,13 @@ def save_page(page_id, title, content):
     if conn is None:
         return False
 
+    cur = None
+
     try:
         cur = conn.cursor()
+
+        safe_title = (title or "").strip() or "Untitled Page"
+        safe_content = clean_html(content)
 
         cur.execute(
             """
@@ -640,16 +657,15 @@ def save_page(page_id, title, content):
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = %s
             """,
-            (
-                title.strip() or "Untitled Page",
-                content or "",
-                page_id
-            )
+            (safe_title, safe_content, page_id),
         )
 
-        conn.commit()
-        cur.close()
+        if cur.rowcount == 0:
+            conn.rollback()
+            st.error("Page not found.")
+            return False
 
+        conn.commit()
         return True
 
     except Exception as error:
@@ -658,6 +674,8 @@ def save_page(page_id, title, content):
         return False
 
     finally:
+        if cur:
+            cur.close()
         conn.close()
 
 
@@ -667,23 +685,24 @@ def delete_page(page_id):
     if conn is None:
         return False
 
+    cur = None
+
     try:
         cur = conn.cursor()
-
         cur.execute(
             """
             DELETE FROM pages
             WHERE id = %s
             """,
-            (page_id,)
+            (page_id,),
         )
 
         conn.commit()
-        cur.close()
-
-        return True
+        return cur.rowcount > 0
 
     finally:
+        if cur:
+            cur.close()
         conn.close()
 
 
@@ -692,6 +711,8 @@ def search_pages(user_id, search_text):
 
     if conn is None:
         return []
+
+    cur = None
 
     try:
         cur = conn.cursor()
@@ -710,77 +731,36 @@ def search_pages(user_id, search_text):
             JOIN notebooks
                 ON sections.notebook_id = notebooks.id
             WHERE notebooks.user_id = %s
-            AND (
-                pages.title ILIKE %s
-                OR pages.content ILIKE %s
-            )
+              AND (
+                    pages.title ILIKE %s
+                    OR pages.content ILIKE %s
+              )
             ORDER BY pages.updated_at DESC
             """,
-            (user_id, pattern, pattern)
+            (user_id, pattern, pattern),
         )
 
-        rows = cur.fetchall()
-        cur.close()
-
-        return rows
+        return cur.fetchall()
 
     finally:
+        if cur:
+            cur.close()
         conn.close()
 
 
 # =========================================================
-# RICH TEXT EDITOR
+# RICH TEXT TOOLBAR
 # =========================================================
 
 QUILL_TOOLBAR = [
-    [
-        "bold",
-        "italic",
-        "underline",
-        "strike"
-    ],
-    [
-        {
-            "color": []
-        },
-        {
-            "background": []
-        }
-    ],
-    [
-        {
-            "header": [1, 2, 3, 4, 5, 6, False]
-        }
-    ],
-    [
-        {
-            "align": []
-        }
-    ],
-    [
-        {
-            "list": "ordered"
-        },
-        {
-            "list": "bullet"
-        }
-    ],
-    [
-        {
-            "indent": "-1"
-        },
-        {
-            "indent": "+1"
-        }
-    ],
-    [
-        "blockquote",
-        "code-block"
-    ],
-    [
-        "link",
-        "clean"
-    ]
+    ["bold", "italic", "underline", "strike"],
+    [{"color": []}, {"background": []}],
+    [{"header": [1, 2, 3, 4, 5, 6, False]}],
+    [{"align": []}],
+    [{"list": "ordered"}, {"list": "bullet"}],
+    [{"indent": "-1"}, {"indent": "+1"}],
+    ["blockquote", "code-block"],
+    ["link", "clean"],
 ]
 
 
@@ -867,24 +847,26 @@ def pdf_css():
 
 
 def build_page_pdf(username, title, content):
+    safe_username = escape(username or "")
+    safe_title = escape(title or "Untitled Page")
+    safe_content = clean_html(content)
+
     document = f"""
     <!DOCTYPE html>
     <html>
     <head>
         <meta charset="utf-8">
-        <style>
-            {pdf_css()}
-        </style>
+        <style>{pdf_css()}</style>
     </head>
     <body>
-        <h1>{title or "Untitled Page"}</h1>
+        <h1>{safe_title}</h1>
 
         <div class="metadata">
-            Created for {username}
+            Created for {safe_username}
         </div>
 
         <div>
-            {content or "<p>No content.</p>"}
+            {safe_content or "<p>No content.</p>"}
         </div>
     </body>
     </html>
@@ -894,6 +876,9 @@ def build_page_pdf(username, title, content):
 
 
 def build_section_pdf(username, section_name, pages):
+    safe_username = escape(username or "")
+    safe_section_name = escape(section_name or "Untitled Section")
+
     pages_html = ""
 
     for page_id, title, updated_at in pages:
@@ -902,19 +887,20 @@ def build_section_pdf(username, section_name, pages):
         if not page:
             continue
 
-        page_title = page[2] or "Untitled Page"
-        page_content = page[3] or ""
+        safe_title = escape(page[2] or "Untitled Page")
+        safe_content = clean_html(page[3] or "")
+        safe_updated_at = escape(str(updated_at))
 
         pages_html += f"""
         <section class="section-page">
-            <h1>{page_title}</h1>
+            <h1>{safe_title}</h1>
 
             <div class="metadata">
-                Updated: {updated_at}
+                Updated: {safe_updated_at}
             </div>
 
             <div>
-                {page_content or "<p>No content.</p>"}
+                {safe_content or "<p>No content.</p>"}
             </div>
         </section>
         """
@@ -924,18 +910,16 @@ def build_section_pdf(username, section_name, pages):
     <html>
     <head>
         <meta charset="utf-8">
-        <style>
-            {pdf_css()}
-        </style>
+        <style>{pdf_css()}</style>
     </head>
     <body>
-        <h1>{section_name}</h1>
+        <h1>{safe_section_name}</h1>
 
         <div class="metadata">
-            Created for {username}
+            Created for {safe_username}
         </div>
 
-        {pages_html}
+        {pages_html or "<p>This section has no pages.</p>"}
     </body>
     </html>
     """
@@ -944,7 +928,7 @@ def build_section_pdf(username, section_name, pages):
 
 
 # =========================================================
-# INITIALIZATION
+# SESSION STATE
 # =========================================================
 
 init_db()
@@ -974,29 +958,27 @@ if st.session_state.user is None:
             <p>Your personal OneNote-style workspace</p>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
-    login_tab, register_tab = st.tabs(
-        ["Login", "Register"]
-    )
+    login_tab, register_tab = st.tabs(["Login", "Register"])
 
     with login_tab:
         username = st.text_input(
             "Username",
-            key="login_username"
+            key="login_username",
         )
 
         password = st.text_input(
             "Password",
             type="password",
-            key="login_password"
+            key="login_password",
         )
 
         if st.button(
             "Login",
             type="primary",
-            use_container_width=True
+            use_container_width=True,
         ):
             user = login_user(username, password)
 
@@ -1009,31 +991,29 @@ if st.session_state.user is None:
     with register_tab:
         new_username = st.text_input(
             "New username",
-            key="new_username"
+            key="new_username",
         )
 
         new_password = st.text_input(
             "New password",
             type="password",
-            key="new_password"
+            key="new_password",
         )
 
         confirm_password = st.text_input(
             "Confirm password",
             type="password",
-            key="confirm_password"
+            key="confirm_password",
         )
 
         if st.button(
             "Create Account",
-            use_container_width=True
+            use_container_width=True,
         ):
             if new_password != confirm_password:
                 st.error("Passwords do not match.")
             elif create_user(new_username, new_password):
-                st.success(
-                    "Account created. You can now log in."
-                )
+                st.success("Account created. You can now log in.")
 
     st.stop()
 
@@ -1052,7 +1032,6 @@ username = st.session_state.user["username"]
 
 st.sidebar.title("My Notebook")
 st.sidebar.caption(f"Signed in as {username}")
-
 st.sidebar.markdown("---")
 st.sidebar.subheader("Notebooks")
 
@@ -1061,7 +1040,6 @@ notebook_names = dict(notebooks)
 notebook_ids = list(notebook_names.keys())
 
 if notebook_ids:
-
     if st.session_state.selected_notebook not in notebook_ids:
         st.session_state.selected_notebook = notebook_ids[0]
 
@@ -1071,11 +1049,10 @@ if notebook_ids:
         format_func=lambda value: notebook_names[value],
         index=notebook_ids.index(
             st.session_state.selected_notebook
-        )
+        ),
     )
 
     st.session_state.selected_notebook = selected_notebook
-
 else:
     selected_notebook = None
     st.sidebar.info("Create your first notebook.")
@@ -1084,16 +1061,16 @@ else:
 with st.sidebar.expander("Create notebook"):
     notebook_name = st.text_input(
         "Notebook name",
-        key="notebook_name"
+        key="notebook_name",
     )
 
     if st.button(
         "Create notebook",
-        use_container_width=True
+        use_container_width=True,
     ):
         notebook_id = create_notebook(
             user_id,
-            notebook_name
+            notebook_name,
         )
 
         if notebook_id:
@@ -1101,8 +1078,11 @@ with st.sidebar.expander("Create notebook"):
             st.rerun()
 
 
-if selected_notebook:
+# =========================================================
+# SIDEBAR: SECTIONS
+# =========================================================
 
+if selected_notebook:
     st.sidebar.markdown("---")
     st.sidebar.subheader("Sections")
 
@@ -1111,7 +1091,6 @@ if selected_notebook:
     section_ids = list(section_names.keys())
 
     if section_ids:
-
         if st.session_state.selected_section not in section_ids:
             st.session_state.selected_section = section_ids[0]
 
@@ -1121,11 +1100,10 @@ if selected_notebook:
             format_func=lambda value: section_names[value],
             index=section_ids.index(
                 st.session_state.selected_section
-            )
+            ),
         )
 
         st.session_state.selected_section = selected_section
-
     else:
         selected_section = None
         st.sidebar.info("Create your first section.")
@@ -1133,22 +1111,23 @@ if selected_notebook:
     with st.sidebar.expander("Create section"):
         section_name = st.text_input(
             "Section name",
-            key="section_name"
+            key="section_name",
         )
 
         if st.button(
             "Create section",
-            use_container_width=True
+            use_container_width=True,
         ):
-            if selected_notebook:
-                section_id = create_section(
-                    selected_notebook,
-                    section_name
-                )
+            section_id = create_section(
+                selected_notebook,
+                section_name,
+            )
 
-                if section_id:
-                    st.session_state.selected_section = section_id
-                    st.rerun()
+            if section_id:
+                st.session_state.selected_section = section_id
+                st.rerun()
+else:
+    selected_section = None
 
 
 # =========================================================
@@ -1163,13 +1142,10 @@ if not selected_notebook or not selected_section:
             <p>Create a notebook and section from the sidebar.</p>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
-    st.info(
-        "Use the sidebar to create a notebook and a section."
-    )
-
+    st.info("Use the sidebar to create a notebook and a section.")
     st.stop()
 
 
@@ -1183,11 +1159,15 @@ page_ids = [page[0] for page in pages]
 if not page_ids:
     new_page_id = create_page(
         selected_section,
-        "Welcome Page"
+        "Welcome Page",
     )
 
-    st.session_state.selected_page = new_page_id
-    st.rerun()
+    if new_page_id:
+        st.session_state.selected_page = new_page_id
+        st.rerun()
+
+    st.error("Could not create the first page.")
+    st.stop()
 
 if st.session_state.selected_page not in page_ids:
     st.session_state.selected_page = page_ids[0]
@@ -1200,18 +1180,18 @@ with st.sidebar:
         if st.button(
             title or "Untitled Page",
             key=f"page_{page_id}",
-            use_container_width=True
+            use_container_width=True,
         ):
             st.session_state.selected_page = page_id
             st.rerun()
 
     if st.button(
         "New page",
-        use_container_width=True
+        use_container_width=True,
     ):
         new_page_id = create_page(
             selected_section,
-            "Untitled Page"
+            "Untitled Page",
         )
 
         if new_page_id:
@@ -1230,22 +1210,29 @@ if not page:
     st.stop()
 
 page_id = page[0]
-page_title = page[2]
-page_content = page[3]
+page_title = page[2] or "Untitled Page"
+page_content = page[3] or ""
 
 
 # =========================================================
 # PAGE HEADER
 # =========================================================
 
+safe_notebook_name = escape(
+    notebook_names[selected_notebook]
+)
+
+safe_section_name = escape(
+    section_names[selected_section]
+)
+
 st.markdown(
     f"""
     <div class="section-label">
-        {notebook_names[selected_notebook]}
-        / {section_names[selected_section]}
+        {safe_notebook_name} / {safe_section_name}
     </div>
     """,
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
 header_col1, header_col2 = st.columns([5, 1])
@@ -1256,11 +1243,13 @@ with header_col1:
 with header_col2:
     if st.button(
         "Delete page",
-        use_container_width=True
+        use_container_width=True,
     ):
-        delete_page(page_id)
-        st.session_state.selected_page = None
-        st.rerun()
+        if delete_page(page_id):
+            st.session_state.selected_page = None
+            st.rerun()
+        else:
+            st.error("Could not delete the page.")
 
 
 # =========================================================
@@ -1270,7 +1259,7 @@ with header_col2:
 title_input = st.text_input(
     "Page title",
     value=page_title,
-    key=f"title_{page_id}"
+    key=f"title_{page_id}",
 )
 
 st.caption(
@@ -1279,22 +1268,24 @@ st.caption(
 )
 
 content_input = st_quill(
-    value=page_content or "",
+    value=page_content,
     html=True,
     toolbar=QUILL_TOOLBAR,
     placeholder="Start writing your page...",
-    key=f"editor_{page_id}"
+    key=f"editor_{page_id}",
 )
+
+safe_content_input = clean_html(content_input)
 
 if st.button(
     "Save page",
     type="primary",
-    use_container_width=True
+    use_container_width=True,
 ):
     if save_page(
         page_id,
         title_input,
-        content_input
+        safe_content_input,
     ):
         st.success("Page saved successfully.")
         st.rerun()
@@ -1310,10 +1301,13 @@ st.subheader("Preview")
 st.markdown(
     f"""
     <div class="page-preview">
-        {content_input or "<p>Your page preview will appear here.</p>"}
+        {
+            safe_content_input
+            or "<p>Your page preview will appear here.</p>"
+        }
     </div>
     """,
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
 
@@ -1330,7 +1324,7 @@ with pdf_col1:
     current_page_pdf = build_page_pdf(
         username,
         title_input,
-        content_input
+        safe_content_input,
     )
 
     st.download_button(
@@ -1338,7 +1332,7 @@ with pdf_col1:
         data=current_page_pdf,
         file_name="current_page.pdf",
         mime="application/pdf",
-        use_container_width=True
+        use_container_width=True,
     )
 
 with pdf_col2:
@@ -1347,7 +1341,7 @@ with pdf_col2:
     complete_section_pdf = build_section_pdf(
         username,
         section_names[selected_section],
-        section_pages
+        section_pages,
     )
 
     st.download_button(
@@ -1355,7 +1349,7 @@ with pdf_col2:
         data=complete_section_pdf,
         file_name="section.pdf",
         mime="application/pdf",
-        use_container_width=True
+        use_container_width=True,
     )
 
 
@@ -1368,19 +1362,25 @@ st.sidebar.subheader("Search")
 
 search_text = st.sidebar.text_input(
     "Search pages",
-    key="search_text"
+    key="search_text",
 )
 
 if search_text.strip():
     search_results = search_pages(
         user_id,
-        search_text.strip()
+        search_text.strip(),
     )
 
     if search_results:
         st.sidebar.caption("Results:")
 
-        for result_page_id, result_title, result_section, result_notebook in search_results:
+        for (
+            result_page_id,
+            result_title,
+            result_section,
+            result_notebook,
+        ) in search_results:
+
             result_label = (
                 f"{result_title} "
                 f"({result_notebook} / {result_section})"
@@ -1389,7 +1389,7 @@ if search_text.strip():
             if st.sidebar.button(
                 result_label,
                 key=f"result_{result_page_id}",
-                use_container_width=True
+                use_container_width=True,
             ):
                 st.session_state.selected_page = result_page_id
                 st.rerun()
@@ -1405,7 +1405,7 @@ st.sidebar.markdown("---")
 
 if st.sidebar.button(
     "Logout",
-    use_container_width=True
+    use_container_width=True,
 ):
     st.session_state.user = None
     st.session_state.selected_notebook = None
@@ -1420,5 +1420,5 @@ st.markdown(
         My Notebook
     </div>
     """,
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
