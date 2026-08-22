@@ -1,6 +1,4 @@
-streamlit==1.45.1
-psycopg2-binary==2.9.10
-python-dotenv==1.1.0
-streamlit-quill==0.0.3
-weasyprint==65.1
-bleach==6.2.0
+streamlit
+psycopg2-binary
+python-dotenv
+weasyprint
