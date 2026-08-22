@@ -1,11 +1,9 @@
 import os
 from html import escape
 
-import bleach
 import psycopg2
 import streamlit as st
 from dotenv import load_dotenv
-from streamlit_quill import st_quill
 from weasyprint import HTML
 
 
@@ -24,142 +22,7 @@ st.set_page_config(
 
 
 # =========================================================
-# HTML SANITIZATION
-# =========================================================
-
-ALLOWED_TAGS = [
-    "p",
-    "br",
-    "strong",
-    "em",
-    "u",
-    "s",
-    "h1",
-    "h2",
-    "h3",
-    "h4",
-    "h5",
-    "h6",
-    "blockquote",
-    "pre",
-    "code",
-    "ol",
-    "ul",
-    "li",
-    "a",
-    "span",
-]
-
-ALLOWED_ATTRIBUTES = {
-    "a": ["href", "target", "rel"],
-    "span": ["style"],
-}
-
-
-def clean_html(value):
-    return bleach.clean(
-        value or "",
-        tags=ALLOWED_TAGS,
-        attributes=ALLOWED_ATTRIBUTES,
-        protocols=["http", "https", "mailto"],
-        strip=True,
-    )
-
-
-# =========================================================
-# PAGE STYLE
-# =========================================================
-
-st.markdown(
-    """
-    <style>
-        [data-testid="stSidebar"] {
-            min-width: 300px;
-            max-width: 340px;
-        }
-
-        .notebook-header {
-            padding: 18px 22px;
-            border-radius: 12px;
-            background: linear-gradient(135deg, #2563eb, #7c3aed);
-            color: white;
-            margin-bottom: 20px;
-        }
-
-        .notebook-header h1 {
-            margin: 0;
-            font-size: 30px;
-        }
-
-        .notebook-header p {
-            margin: 5px 0 0 0;
-            opacity: 0.9;
-        }
-
-        .page-preview {
-            min-height: 300px;
-            padding: 24px;
-            border: 1px solid #d1d5db;
-            border-radius: 12px;
-            background-color: #ffffff;
-            color: #202124;
-            line-height: 1.7;
-            font-size: 16px;
-            overflow-wrap: anywhere;
-        }
-
-        .page-preview h1,
-        .page-preview h2,
-        .page-preview h3,
-        .page-preview h4,
-        .page-preview h5,
-        .page-preview h6 {
-            color: #1f2937;
-        }
-
-        .page-preview blockquote {
-            border-left: 4px solid #9ca3af;
-            padding-left: 14px;
-            color: #4b5563;
-        }
-
-        .page-preview pre {
-            padding: 14px;
-            border-radius: 8px;
-            background-color: #f3f4f6;
-            white-space: pre-wrap;
-        }
-
-        .page-preview img {
-            max-width: 100%;
-            height: auto;
-        }
-
-        .page-preview a {
-            color: #2563eb;
-            text-decoration: underline;
-        }
-
-        .section-label {
-            color: #6b7280;
-            font-size: 14px;
-            margin-bottom: 5px;
-        }
-
-        .footer {
-            text-align: center;
-            color: #888888;
-            margin-top: 35px;
-            padding: 15px;
-        }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-
-# =========================================================
-# DATABASE
+# DATABASE CONNECTION
 # =========================================================
 
 def get_connection():
@@ -227,18 +90,6 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-
-            CREATE INDEX IF NOT EXISTS idx_notebooks_user_id
-                ON notebooks(user_id);
-
-            CREATE INDEX IF NOT EXISTS idx_sections_notebook_id
-                ON sections(notebook_id);
-
-            CREATE INDEX IF NOT EXISTS idx_pages_section_id
-                ON pages(section_id);
-
-            CREATE INDEX IF NOT EXISTS idx_pages_updated_at
-                ON pages(updated_at);
             """
         )
 
@@ -255,7 +106,7 @@ def init_db():
 
 
 # =========================================================
-# AUTHENTICATION
+# USER AUTHENTICATION
 # =========================================================
 
 def create_user(username, password):
@@ -361,6 +212,7 @@ def get_notebooks(user_id):
 
     try:
         cur = conn.cursor()
+
         cur.execute(
             """
             SELECT id, name
@@ -370,6 +222,7 @@ def get_notebooks(user_id):
             """,
             (user_id,),
         )
+
         return cur.fetchall()
 
     finally:
@@ -393,6 +246,7 @@ def create_notebook(user_id, name):
 
     try:
         cur = conn.cursor()
+
         cur.execute(
             """
             INSERT INTO notebooks (user_id, name)
@@ -417,38 +271,6 @@ def create_notebook(user_id, name):
         conn.close()
 
 
-def delete_notebook(user_id, notebook_id):
-    conn = get_connection()
-
-    if conn is None:
-        return False
-
-    cur = None
-
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            DELETE FROM notebooks
-            WHERE id = %s
-              AND user_id = %s
-            """,
-            (notebook_id, user_id),
-        )
-
-        conn.commit()
-        return cur.rowcount > 0
-
-    finally:
-        if cur:
-            cur.close()
-        conn.close()
-
-
-# =========================================================
-# SECTION FUNCTIONS
-# =========================================================
-
 def get_sections(notebook_id):
     conn = get_connection()
 
@@ -459,6 +281,7 @@ def get_sections(notebook_id):
 
     try:
         cur = conn.cursor()
+
         cur.execute(
             """
             SELECT id, name
@@ -468,6 +291,7 @@ def get_sections(notebook_id):
             """,
             (notebook_id,),
         )
+
         return cur.fetchall()
 
     finally:
@@ -491,6 +315,7 @@ def create_section(notebook_id, name):
 
     try:
         cur = conn.cursor()
+
         cur.execute(
             """
             INSERT INTO sections (notebook_id, name)
@@ -515,33 +340,6 @@ def create_section(notebook_id, name):
         conn.close()
 
 
-def delete_section(section_id):
-    conn = get_connection()
-
-    if conn is None:
-        return False
-
-    cur = None
-
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            DELETE FROM sections
-            WHERE id = %s
-            """,
-            (section_id,),
-        )
-
-        conn.commit()
-        return cur.rowcount > 0
-
-    finally:
-        if cur:
-            cur.close()
-        conn.close()
-
-
 # =========================================================
 # PAGE FUNCTIONS
 # =========================================================
@@ -556,6 +354,7 @@ def get_pages(section_id):
 
     try:
         cur = conn.cursor()
+
         cur.execute(
             """
             SELECT id, title, updated_at
@@ -565,6 +364,7 @@ def get_pages(section_id):
             """,
             (section_id,),
         )
+
         return cur.fetchall()
 
     finally:
@@ -583,6 +383,7 @@ def get_page(page_id):
 
     try:
         cur = conn.cursor()
+
         cur.execute(
             """
             SELECT id, section_id, title, content, updated_at
@@ -591,6 +392,7 @@ def get_page(page_id):
             """,
             (page_id,),
         )
+
         return cur.fetchone()
 
     finally:
@@ -609,6 +411,7 @@ def create_page(section_id, title="Untitled Page"):
 
     try:
         cur = conn.cursor()
+
         safe_title = (title or "").strip() or "Untitled Page"
 
         cur.execute(
@@ -647,7 +450,6 @@ def save_page(page_id, title, content):
         cur = conn.cursor()
 
         safe_title = (title or "").strip() or "Untitled Page"
-        safe_content = clean_html(content)
 
         cur.execute(
             """
@@ -657,16 +459,11 @@ def save_page(page_id, title, content):
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = %s
             """,
-            (safe_title, safe_content, page_id),
+            (safe_title, content or "", page_id),
         )
 
-        if cur.rowcount == 0:
-            conn.rollback()
-            st.error("Page not found.")
-            return False
-
         conn.commit()
-        return True
+        return cur.rowcount > 0
 
     except Exception as error:
         conn.rollback()
@@ -689,6 +486,7 @@ def delete_page(page_id):
 
     try:
         cur = conn.cursor()
+
         cur.execute(
             """
             DELETE FROM pages
@@ -716,6 +514,7 @@ def search_pages(user_id, search_text):
 
     try:
         cur = conn.cursor()
+
         pattern = f"%{search_text}%"
 
         cur.execute(
@@ -749,19 +548,64 @@ def search_pages(user_id, search_text):
 
 
 # =========================================================
-# RICH TEXT TOOLBAR
+# PAGE STYLE
 # =========================================================
 
-QUILL_TOOLBAR = [
-    ["bold", "italic", "underline", "strike"],
-    [{"color": []}, {"background": []}],
-    [{"header": [1, 2, 3, 4, 5, 6, False]}],
-    [{"align": []}],
-    [{"list": "ordered"}, {"list": "bullet"}],
-    [{"indent": "-1"}, {"indent": "+1"}],
-    ["blockquote", "code-block"],
-    ["link", "clean"],
-]
+st.markdown(
+    """
+    <style>
+        [data-testid="stSidebar"] {
+            min-width: 300px;
+            max-width: 340px;
+        }
+
+        .notebook-header {
+            padding: 18px 22px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #2563eb, #7c3aed);
+            color: white;
+            margin-bottom: 20px;
+        }
+
+        .notebook-header h1 {
+            margin: 0;
+            font-size: 30px;
+        }
+
+        .notebook-header p {
+            margin: 5px 0 0 0;
+            opacity: 0.9;
+        }
+
+        .page-preview {
+            min-height: 300px;
+            padding: 24px;
+            border: 1px solid #d1d5db;
+            border-radius: 12px;
+            background-color: white;
+            color: #202124;
+            line-height: 1.7;
+            font-size: 16px;
+            overflow-wrap: anywhere;
+            white-space: pre-wrap;
+        }
+
+        .section-label {
+            color: #6b7280;
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+
+        .footer {
+            text-align: center;
+            color: #888888;
+            margin-top: 35px;
+            padding: 15px;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 # =========================================================
@@ -791,17 +635,6 @@ def pdf_css():
     h1 {
         color: #1f2937;
         font-size: 24pt;
-        margin-bottom: 4px;
-    }
-
-    h2 {
-        color: #374151;
-        font-size: 18pt;
-    }
-
-    h3 {
-        color: #4b5563;
-        font-size: 14pt;
     }
 
     .metadata {
@@ -812,28 +645,8 @@ def pdf_css():
         margin-bottom: 20px;
     }
 
-    blockquote {
-        border-left: 4px solid #9ca3af;
-        padding-left: 12px;
-        color: #4b5563;
-    }
-
-    pre {
-        background-color: #f3f4f6;
-        padding: 12px;
-        border-radius: 6px;
+    .content {
         white-space: pre-wrap;
-    }
-
-    code {
-        background-color: #f3f4f6;
-        padding: 2px 4px;
-        border-radius: 3px;
-    }
-
-    img {
-        max-width: 100%;
-        height: auto;
     }
 
     .section-page {
@@ -849,7 +662,7 @@ def pdf_css():
 def build_page_pdf(username, title, content):
     safe_username = escape(username or "")
     safe_title = escape(title or "Untitled Page")
-    safe_content = clean_html(content)
+    safe_content = escape(content or "No content.")
 
     document = f"""
     <!DOCTYPE html>
@@ -865,9 +678,7 @@ def build_page_pdf(username, title, content):
             Created for {safe_username}
         </div>
 
-        <div>
-            {safe_content or "<p>No content.</p>"}
-        </div>
+        <div class="content">{safe_content}</div>
     </body>
     </html>
     """
@@ -888,7 +699,7 @@ def build_section_pdf(username, section_name, pages):
             continue
 
         safe_title = escape(page[2] or "Untitled Page")
-        safe_content = clean_html(page[3] or "")
+        safe_content = escape(page[3] or "No content.")
         safe_updated_at = escape(str(updated_at))
 
         pages_html += f"""
@@ -899,9 +710,7 @@ def build_section_pdf(username, section_name, pages):
                 Updated: {safe_updated_at}
             </div>
 
-            <div>
-                {safe_content or "<p>No content.</p>"}
-            </div>
+            <div class="content">{safe_content}</div>
         </section>
         """
 
@@ -947,7 +756,7 @@ if "selected_page" not in st.session_state:
 
 
 # =========================================================
-# LOGIN PAGE
+# LOGIN AND REGISTRATION
 # =========================================================
 
 if st.session_state.user is None:
@@ -955,7 +764,7 @@ if st.session_state.user is None:
         """
         <div class="notebook-header">
             <h1>My Notebook</h1>
-            <p>Your personal OneNote-style workspace</p>
+            <p>Your personal notebook workspace</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1169,8 +978,10 @@ if not page_ids:
     st.error("Could not create the first page.")
     st.stop()
 
+
 if st.session_state.selected_page not in page_ids:
     st.session_state.selected_page = page_ids[0]
+
 
 with st.sidebar:
     st.markdown("---")
@@ -1263,19 +1074,18 @@ title_input = st.text_input(
 )
 
 st.caption(
-    "Use the toolbar to format text, add colors, highlights, "
-    "headings, lists, links, alignment, and indentation."
+    "Write your page content below. "
+    "This version uses a standard text editor and does not require "
+    "streamlit-quill."
 )
 
-content_input = st_quill(
+content_input = st.text_area(
+    "Page content",
     value=page_content,
-    html=True,
-    toolbar=QUILL_TOOLBAR,
-    placeholder="Start writing your page...",
+    height=350,
     key=f"editor_{page_id}",
+    placeholder="Start writing your page...",
 )
-
-safe_content_input = clean_html(content_input)
 
 if st.button(
     "Save page",
@@ -1285,10 +1095,12 @@ if st.button(
     if save_page(
         page_id,
         title_input,
-        safe_content_input,
+        content_input,
     ):
         st.success("Page saved successfully.")
         st.rerun()
+    else:
+        st.error("Could not save the page.")
 
 
 # =========================================================
@@ -1298,13 +1110,14 @@ if st.button(
 st.markdown("---")
 st.subheader("Preview")
 
+preview_content = escape(
+    content_input or "Your page preview will appear here."
+)
+
 st.markdown(
     f"""
     <div class="page-preview">
-        {
-            safe_content_input
-            or "<p>Your page preview will appear here.</p>"
-        }
+        {preview_content}
     </div>
     """,
     unsafe_allow_html=True,
@@ -1324,7 +1137,7 @@ with pdf_col1:
     current_page_pdf = build_page_pdf(
         username,
         title_input,
-        safe_content_input,
+        content_input,
     )
 
     st.download_button(
