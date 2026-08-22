@@ -1,14 +1,13 @@
 import os
 import re
 import html
-import json
 import hashlib
 import secrets
-from datetime import datetime, timedelta
+from io import BytesIO
+from datetime import datetime
 
 import psycopg2
 import streamlit as st
-import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from fpdf import FPDF
 
@@ -20,66 +19,14 @@ from fpdf import FPDF
 load_dotenv()
 
 st.set_page_config(
-    page_title="Calendar Notes",
-    page_icon="📝",
+    page_title="My Notebook",
+    page_icon="Notebook",
     layout="wide"
 )
 
 
 # =========================================================
-# CUSTOM CSS
-# =========================================================
-
-st.markdown(
-    """
-    <style>
-    .note-preview {
-        min-height: 300px;
-        padding: 20px;
-        border: 1px solid #d0d7de;
-        border-radius: 12px;
-        background-color: white;
-        color: #222222;
-        line-height: 1.8;
-        font-size: 16px;
-        overflow-wrap: anywhere;
-    }
-
-    mark {
-        padding: 3px 6px;
-        border-radius: 5px;
-    }
-
-    mark.yellow {
-        background-color: #fff176;
-    }
-
-    mark.red {
-        background-color: #ff9e9e;
-    }
-
-    mark.green {
-        background-color: #a5d6a7;
-    }
-
-    .stTextArea textarea {
-        font-size: 16px;
-        line-height: 1.6;
-    }
-
-    .app-footer {
-        text-align: center;
-        color: grey;
-        margin-top: 20px;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
-
-# =========================================================
-# DATABASE
+# DATABASE CONNECTION
 # =========================================================
 
 def get_connection():
@@ -111,14 +58,34 @@ def init_db():
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
                 username TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL
+                password_hash TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
-            CREATE TABLE IF NOT EXISTS calendar_notes (
-                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-                note_date DATE NOT NULL,
+            CREATE TABLE IF NOT EXISTS notebooks (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL
+                    REFERENCES users(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS sections (
+                id SERIAL PRIMARY KEY,
+                notebook_id INTEGER NOT NULL
+                    REFERENCES notebooks(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS pages (
+                id SERIAL PRIMARY KEY,
+                section_id INTEGER NOT NULL
+                    REFERENCES sections(id) ON DELETE CASCADE,
+                title TEXT NOT NULL DEFAULT 'Untitled Page',
                 content TEXT NOT NULL DEFAULT '',
-                PRIMARY KEY (user_id, note_date)
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """
         )
@@ -128,7 +95,12 @@ def init_db():
         conn.close()
 
     except Exception as error:
+        conn.rollback()
         st.error(f"Database setup error: {error}")
+
+    finally:
+        if conn:
+            conn.close()
 
 
 # =========================================================
@@ -151,7 +123,6 @@ def hash_password(password):
 def verify_password(password, stored_password):
     try:
         salt_hex, hash_hex = stored_password.split("$")
-
         salt = bytes.fromhex(salt_hex)
 
         password_hash = hashlib.pbkdf2_hmac(
@@ -168,40 +139,6 @@ def verify_password(password, stored_password):
 
     except Exception:
         return False
-
-
-def verify_user(username, password):
-    conn = get_connection()
-
-    if not conn:
-        return None
-
-    try:
-        cur = conn.cursor()
-
-        cur.execute(
-            """
-            SELECT id, password_hash
-            FROM users
-            WHERE username = %s
-            """,
-            (username.strip(),)
-        )
-
-        user = cur.fetchone()
-
-        cur.close()
-
-        if user and verify_password(password, user[1]):
-            return user[0]
-
-    except Exception as error:
-        st.error(f"Login error: {error}")
-
-    finally:
-        conn.close()
-
-    return None
 
 
 def create_user(username, password):
@@ -250,91 +187,114 @@ def create_user(username, password):
         conn.close()
 
 
-# =========================================================
-# NOTES
-# =========================================================
-
-def load_notes(user_id):
+def login_user(username, password):
     conn = get_connection()
 
     if not conn:
-        return {}
+        return None
 
     try:
         cur = conn.cursor()
 
         cur.execute(
             """
-            SELECT note_date, content
-            FROM calendar_notes
+            SELECT id, username, password_hash
+            FROM users
+            WHERE username = %s
+            """,
+            (username.strip(),)
+        )
+
+        user = cur.fetchone()
+        cur.close()
+
+        if user and verify_password(password, user[2]):
+            return {
+                "id": user[0],
+                "username": user[1]
+            }
+
+    except Exception as error:
+        st.error(f"Login error: {error}")
+
+    finally:
+        conn.close()
+
+    return None
+
+
+# =========================================================
+# NOTEBOOK FUNCTIONS
+# =========================================================
+
+def get_notebooks(user_id):
+    conn = get_connection()
+
+    if not conn:
+        return []
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT id, name
+            FROM notebooks
             WHERE user_id = %s
-            ORDER BY note_date
+            ORDER BY name
             """,
             (user_id,)
         )
 
-        rows = cur.fetchall()
+        notebooks = cur.fetchall()
         cur.close()
 
-        return {
-            str(note_date): content
-            for note_date, content in rows
-        }
-
-    except Exception as error:
-        st.error(f"Could not load notes: {error}")
-        return {}
+        return notebooks
 
     finally:
         conn.close()
 
 
-def save_note(user_id, date_string, content):
+def create_notebook(user_id, name):
+    name = name.strip()
+
+    if not name:
+        return None
+
     conn = get_connection()
 
     if not conn:
-        return False
+        return None
 
     try:
         cur = conn.cursor()
 
-        if content.strip():
-            cur.execute(
-                """
-                INSERT INTO calendar_notes
-                    (user_id, note_date, content)
-                VALUES
-                    (%s, %s, %s)
-                ON CONFLICT (user_id, note_date)
-                DO UPDATE SET content = EXCLUDED.content
-                """,
-                (user_id, date_string, content)
-            )
-        else:
-            cur.execute(
-                """
-                DELETE FROM calendar_notes
-                WHERE user_id = %s
-                AND note_date = %s
-                """,
-                (user_id, date_string)
-            )
+        cur.execute(
+            """
+            INSERT INTO notebooks (user_id, name)
+            VALUES (%s, %s)
+            RETURNING id
+            """,
+            (user_id, name)
+        )
+
+        notebook_id = cur.fetchone()[0]
 
         conn.commit()
         cur.close()
 
-        return True
+        return notebook_id
 
     except Exception as error:
         conn.rollback()
-        st.error(f"Could not save note: {error}")
-        return False
+        st.error(f"Could not create notebook: {error}")
+        return None
 
     finally:
         conn.close()
 
 
-def delete_note(user_id, date_string):
+def rename_notebook(notebook_id, name):
     conn = get_connection()
 
     if not conn:
@@ -345,11 +305,287 @@ def delete_note(user_id, date_string):
 
         cur.execute(
             """
-            DELETE FROM calendar_notes
-            WHERE user_id = %s
-            AND note_date = %s
+            UPDATE notebooks
+            SET name = %s
+            WHERE id = %s
             """,
-            (user_id, date_string)
+            (name.strip(), notebook_id)
+        )
+
+        conn.commit()
+        cur.close()
+
+        return True
+
+    finally:
+        conn.close()
+
+
+def delete_notebook(notebook_id):
+    conn = get_connection()
+
+    if not conn:
+        return False
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            DELETE FROM notebooks
+            WHERE id = %s
+            """,
+            (notebook_id,)
+        )
+
+        conn.commit()
+        cur.close()
+
+        return True
+
+    finally:
+        conn.close()
+
+
+# =========================================================
+# SECTION FUNCTIONS
+# =========================================================
+
+def get_sections(notebook_id):
+    conn = get_connection()
+
+    if not conn:
+        return []
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT id, name
+            FROM sections
+            WHERE notebook_id = %s
+            ORDER BY name
+            """,
+            (notebook_id,)
+        )
+
+        sections = cur.fetchall()
+        cur.close()
+
+        return sections
+
+    finally:
+        conn.close()
+
+
+def create_section(notebook_id, name):
+    name = name.strip()
+
+    if not name:
+        return None
+
+    conn = get_connection()
+
+    if not conn:
+        return None
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            INSERT INTO sections (notebook_id, name)
+            VALUES (%s, %s)
+            RETURNING id
+            """,
+            (notebook_id, name)
+        )
+
+        section_id = cur.fetchone()[0]
+
+        conn.commit()
+        cur.close()
+
+        return section_id
+
+    except Exception as error:
+        conn.rollback()
+        st.error(f"Could not create section: {error}")
+        return None
+
+    finally:
+        conn.close()
+
+
+def rename_section(section_id, name):
+    conn = get_connection()
+
+    if not conn:
+        return False
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            UPDATE sections
+            SET name = %s
+            WHERE id = %s
+            """,
+            (name.strip(), section_id)
+        )
+
+        conn.commit()
+        cur.close()
+
+        return True
+
+    finally:
+        conn.close()
+
+
+def delete_section(section_id):
+    conn = get_connection()
+
+    if not conn:
+        return False
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            DELETE FROM sections
+            WHERE id = %s
+            """,
+            (section_id,)
+        )
+
+        conn.commit()
+        cur.close()
+
+        return True
+
+    finally:
+        conn.close()
+
+
+# =========================================================
+# PAGE FUNCTIONS
+# =========================================================
+
+def get_pages(section_id):
+    conn = get_connection()
+
+    if not conn:
+        return []
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT id, title, updated_at
+            FROM pages
+            WHERE section_id = %s
+            ORDER BY updated_at DESC
+            """,
+            (section_id,)
+        )
+
+        pages = cur.fetchall()
+        cur.close()
+
+        return pages
+
+    finally:
+        conn.close()
+
+
+def get_page(page_id):
+    conn = get_connection()
+
+    if not conn:
+        return None
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT id, section_id, title, content, created_at, updated_at
+            FROM pages
+            WHERE id = %s
+            """,
+            (page_id,)
+        )
+
+        page = cur.fetchone()
+        cur.close()
+
+        return page
+
+    finally:
+        conn.close()
+
+
+def create_page(section_id, title="Untitled Page"):
+    conn = get_connection()
+
+    if not conn:
+        return None
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            INSERT INTO pages (section_id, title, content)
+            VALUES (%s, %s, '')
+            RETURNING id
+            """,
+            (section_id, title.strip() or "Untitled Page")
+        )
+
+        page_id = cur.fetchone()[0]
+
+        conn.commit()
+        cur.close()
+
+        return page_id
+
+    except Exception as error:
+        conn.rollback()
+        st.error(f"Could not create page: {error}")
+        return None
+
+    finally:
+        conn.close()
+
+
+def save_page(page_id, title, content):
+    conn = get_connection()
+
+    if not conn:
+        return False
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            UPDATE pages
+            SET title = %s,
+                content = %s,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+            """,
+            (
+                title.strip() or "Untitled Page",
+                content,
+                page_id
+            )
         )
 
         conn.commit()
@@ -359,40 +595,99 @@ def delete_note(user_id, date_string):
 
     except Exception as error:
         conn.rollback()
-        st.error(f"Could not delete note: {error}")
+        st.error(f"Could not save page: {error}")
         return False
 
     finally:
         conn.close()
 
 
+def delete_page(page_id):
+    conn = get_connection()
+
+    if not conn:
+        return False
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            DELETE FROM pages
+            WHERE id = %s
+            """,
+            (page_id,)
+        )
+
+        conn.commit()
+        cur.close()
+
+        return True
+
+    finally:
+        conn.close()
+
+
+def search_pages(user_id, search_term):
+    conn = get_connection()
+
+    if not conn:
+        return []
+
+    try:
+        cur = conn.cursor()
+
+        search_pattern = f"%{search_term}%"
+
+        cur.execute(
+            """
+            SELECT
+                pages.id,
+                pages.title,
+                sections.name,
+                notebooks.name
+            FROM pages
+            JOIN sections
+                ON pages.section_id = sections.id
+            JOIN notebooks
+                ON sections.notebook_id = notebooks.id
+            WHERE notebooks.user_id = %s
+            AND (
+                pages.title ILIKE %s
+                OR pages.content ILIKE %s
+            )
+            ORDER BY pages.updated_at DESC
+            """,
+            (
+                user_id,
+                search_pattern,
+                search_pattern
+            )
+        )
+
+        results = cur.fetchall()
+        cur.close()
+
+        return results
+
+    finally:
+        conn.close()
+
+
 # =========================================================
-# NOTE FORMATTING
+# TEXT FORMATTING
 # =========================================================
 
-def clean_markup(text):
-    """
-    Removes formatting markers before exporting to PDF.
-    """
-
+def remove_markup(text):
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
     text = re.sub(r"==(.+?)==", r"\1", text)
     text = re.sub(r"!!(.+?)!!", r"\1", text)
     text = re.sub(r"##(.+?)##", r"\1", text)
-    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
 
     return text
 
 
-def format_note_html(text):
-    """
-    Supported formatting:
-
-    **text** -> bold
-    ==text== -> yellow highlight
-    !!text!! -> red highlight
-    ##text## -> green highlight
-    """
-
+def note_to_html(text):
     safe_text = html.escape(text)
 
     safe_text = re.sub(
@@ -422,10 +717,7 @@ def format_note_html(text):
     return safe_text.replace("\n", "<br>")
 
 
-def add_highlight(text, color):
-    if not text.strip():
-        return text
-
+def highlight_text(text, color):
     markers = {
         "Yellow": ("==", "=="),
         "Red": ("!!", "!!"),
@@ -434,27 +726,36 @@ def add_highlight(text, color):
 
     start_marker, end_marker = markers[color]
 
-    return f"{start_marker}{text}{end_marker}"
+    if text.strip():
+        return f"{start_marker}{text}{end_marker}"
 
-
-def remove_formatting(text):
-    return clean_markup(text)
+    return text
 
 
 # =========================================================
 # PDF EXPORT
 # =========================================================
 
-def generate_pdf(username, notes, start_date, end_date):
+def pdf_text(text):
+    text = remove_markup(text)
+
+    return (
+        text
+        .encode("latin-1", "replace")
+        .decode("latin-1")
+    )
+
+
+def build_page_pdf(username, title, content):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=15)
 
-    pdf.set_font("Helvetica", "B", 16)
+    pdf.set_font("Helvetica", "B", 18)
     pdf.cell(
         0,
-        10,
-        f"Calendar Notes: {username}",
+        12,
+        pdf_text(title),
         new_x="LMARGIN",
         new_y="NEXT",
         align="C"
@@ -463,218 +764,181 @@ def generate_pdf(username, notes, start_date, end_date):
     pdf.set_font("Helvetica", "", 10)
     pdf.cell(
         0,
-        10,
-        f"Period: {start_date} to {end_date}",
+        8,
+        f"Created for {pdf_text(username)}",
         new_x="LMARGIN",
         new_y="NEXT",
         align="C"
     )
 
-    pdf.ln(8)
+    pdf.ln(10)
 
-    found_notes = False
+    pdf.set_font("Helvetica", "", 11)
+    pdf.multi_cell(
+        0,
+        7,
+        pdf_text(content)
+    )
 
-    for date_string in sorted(notes.keys()):
-        if str(start_date) <= date_string <= str(end_date):
-            found_notes = True
+    return bytes(pdf.output())
 
-            pdf.set_fill_color(225, 235, 250)
-            pdf.set_font("Helvetica", "B", 12)
 
-            pdf.cell(
-                0,
-                9,
-                f"Date: {date_string}",
-                fill=True,
-                new_x="LMARGIN",
-                new_y="NEXT"
-            )
+def build_section_pdf(username, section_name, pages):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=15)
 
-            pdf.set_font("Helvetica", "", 11)
+    pdf.set_font("Helvetica", "B", 18)
+    pdf.cell(
+        0,
+        12,
+        pdf_text(section_name),
+        new_x="LMARGIN",
+        new_y="NEXT",
+        align="C"
+    )
 
-            note_text = clean_markup(str(notes[date_string]))
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(
+        0,
+        8,
+        f"Created for {pdf_text(username)}",
+        new_x="LMARGIN",
+        new_y="NEXT",
+        align="C"
+    )
 
-            # Helvetica does not support every Unicode character.
-            note_text = (
-                note_text
-                .encode("latin-1", "replace")
-                .decode("latin-1")
-            )
+    pdf.ln(10)
 
-            pdf.multi_cell(
-                0,
-                7,
-                note_text
-            )
+    for page_id, title, updated_at in pages:
+        page = get_page(page_id)
 
-            pdf.ln(4)
+        if not page:
+            continue
 
-            pdf.set_draw_color(180, 180, 180)
-            pdf.line(
-                10,
-                pdf.get_y(),
-                200,
-                pdf.get_y()
-            )
+        content = page[3]
 
-            pdf.ln(5)
-
-    if not found_notes:
-        pdf.set_font("Helvetica", "", 11)
+        pdf.set_font("Helvetica", "B", 14)
         pdf.cell(
             0,
             10,
-            "No notes found for this period."
+            pdf_text(title),
+            new_x="LMARGIN",
+            new_y="NEXT"
         )
+
+        pdf.set_font("Helvetica", "", 11)
+        pdf.multi_cell(
+            0,
+            7,
+            pdf_text(content)
+        )
+
+        pdf.ln(8)
+
+        pdf.set_draw_color(180, 180, 180)
+        pdf.line(
+            10,
+            pdf.get_y(),
+            200,
+            pdf.get_y()
+        )
+
+        pdf.ln(8)
 
     return bytes(pdf.output())
 
 
 # =========================================================
-# CALENDAR
+# STYLING
 # =========================================================
 
-def create_calendar(notes):
-    events = []
-
-    for date_string, content in notes.items():
-        preview = content.split("\n")[0]
-        preview = clean_markup(preview).strip()
-
-        if len(preview) > 25:
-            preview = preview[:25] + "..."
-
-        events.append(
-            {
-                "title": preview or "Note",
-                "start": date_string,
-                "allDay": True,
-                "backgroundColor": "#007bff",
-                "borderColor": "#0056b3"
-            }
-        )
-
-    calendar_template = """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.8/index.global.min.js"></script>
-
-        <style>
-            body {
-                margin: 0;
-                font-family: Arial, sans-serif;
-            }
-
-            #calendar {
-                height: 80vh;
-            }
-
-            .fc-event {
-                cursor: pointer;
-            }
-        </style>
-    </head>
-
-    <body>
-        <div id="calendar"></div>
-
-        <script>
-            document.addEventListener("DOMContentLoaded", function() {
-                const calendarElement =
-                    document.getElementById("calendar");
-
-                const calendar = new FullCalendar.Calendar(
-                    calendarElement,
-                    {
-                        initialView: "dayGridMonth",
-                        height: "100%",
-                        events: __EVENTS__,
-
-                        dateClick: function(info) {
-                            const url = new URL(
-                                window.parent.location.href
-                            );
-
-                            url.searchParams.set(
-                                "edit_date",
-                                info.dateStr
-                            );
-
-                            window.parent.location.href =
-                                url.toString();
-                        },
-
-                        eventClick: function(info) {
-                            const url = new URL(
-                                window.parent.location.href
-                            );
-
-                            url.searchParams.set(
-                                "edit_date",
-                                info.event.startStr
-                            );
-
-                            window.parent.location.href =
-                                url.toString();
-                        }
-                    }
-                );
-
-                calendar.render();
-            });
-        </script>
-    </body>
-    </html>
+st.markdown(
     """
+    <style>
+    .note-preview {
+        min-height: 300px;
+        padding: 20px;
+        border: 1px solid #d0d7de;
+        border-radius: 10px;
+        background-color: white;
+        color: #222222;
+        line-height: 1.8;
+        font-size: 16px;
+        overflow-wrap: anywhere;
+    }
 
-    html_to_render = calendar_template.replace(
-        "__EVENTS__",
-        json.dumps(events)
-    )
+    mark {
+        padding: 3px 6px;
+        border-radius: 4px;
+    }
 
-    components.html(
-        html_to_render,
-        height=800,
-        scrolling=False
-    )
+    mark.yellow {
+        background-color: #fff176;
+    }
+
+    mark.red {
+        background-color: #ff9e9e;
+    }
+
+    mark.green {
+        background-color: #a5d6a7;
+    }
+
+    .page-card {
+        padding: 8px;
+        border-radius: 6px;
+        margin-bottom: 5px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+
+# =========================================================
+# INITIALIZE DATABASE
+# =========================================================
+
+init_db()
 
 
 # =========================================================
 # SESSION STATE
 # =========================================================
 
-init_db()
+if "user" not in st.session_state:
+    st.session_state.user = None
 
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
+if "selected_notebook" not in st.session_state:
+    st.session_state.selected_notebook = None
 
-if "user_id" not in st.session_state:
-    st.session_state.user_id = None
+if "selected_section" not in st.session_state:
+    st.session_state.selected_section = None
 
-if "username" not in st.session_state:
-    st.session_state.username = None
+if "selected_page" not in st.session_state:
+    st.session_state.selected_page = None
 
 
 # =========================================================
-# LOGIN AND REGISTRATION
+# LOGIN SCREEN
 # =========================================================
 
-if not st.session_state.authenticated:
+if st.session_state.user is None:
 
-    st.title("Calendar Notes")
+    st.title("My Notebook")
 
     login_tab, register_tab = st.tabs(
         ["Login", "Register"]
     )
 
     with login_tab:
-        username = st.text_input(
+        login_username = st.text_input(
             "Username",
             key="login_username"
         )
 
-        password = st.text_input(
+        login_password = st.text_input(
             "Password",
             type="password",
             key="login_password"
@@ -684,27 +948,24 @@ if not st.session_state.authenticated:
             "Login",
             use_container_width=True
         ):
-            user_id = verify_user(
-                username,
-                password
+            user = login_user(
+                login_username,
+                login_password
             )
 
-            if user_id:
-                st.session_state.authenticated = True
-                st.session_state.user_id = user_id
-                st.session_state.username = username.strip()
-
+            if user:
+                st.session_state.user = user
                 st.rerun()
             else:
                 st.error("Invalid username or password.")
 
     with register_tab:
-        new_username = st.text_input(
+        register_username = st.text_input(
             "New username",
             key="register_username"
         )
 
-        new_password = st.text_input(
+        register_password = st.text_input(
             "New password",
             type="password",
             key="register_password"
@@ -720,292 +981,427 @@ if not st.session_state.authenticated:
             "Create Account",
             use_container_width=True
         ):
-            if new_password != confirm_password:
+            if register_password != confirm_password:
                 st.error("Passwords do not match.")
-            elif create_user(new_username, new_password):
+            elif create_user(
+                register_username,
+                register_password
+            ):
                 st.success(
                     "Account created. You can now log in."
                 )
-
-    st.markdown("---")
-    st.markdown(
-        '<div class="app-footer">© 2026 timothymarkbal-e</div>',
-        unsafe_allow_html=True
-    )
 
     st.stop()
 
 
 # =========================================================
-# AUTHENTICATED APPLICATION
+# CURRENT USER
 # =========================================================
 
-st.sidebar.title(
-    f"User: {st.session_state.username}"
-)
+user_id = st.session_state.user["id"]
+username = st.session_state.user["username"]
 
-notes = load_notes(
-    st.session_state.user_id
-)
+st.sidebar.title("My Notebook")
+st.sidebar.caption(f"Signed in as {username}")
+
+
+# =========================================================
+# NOTEBOOK SIDEBAR
+# =========================================================
 
 st.sidebar.markdown("---")
+st.sidebar.subheader("Notebooks")
 
-# ---------------------------------------------------------
-# PDF EXPORT
-# ---------------------------------------------------------
+notebooks = get_notebooks(user_id)
 
-st.sidebar.subheader("PDF Export")
+notebook_names = {
+    notebook_id: notebook_name
+    for notebook_id, notebook_name in notebooks
+}
 
-export_range = st.sidebar.selectbox(
-    "Export range",
-    ["Daily", "Weekly", "Monthly", "All Notes"]
-)
+if notebooks:
+    notebook_ids = list(notebook_names.keys())
 
-today = datetime.now().date()
+    if (
+        st.session_state.selected_notebook not in notebook_ids
+    ):
+        st.session_state.selected_notebook = notebook_ids[0]
 
-if export_range == "Daily":
-    start_date = today
-    end_date = today
+    selected_notebook = st.sidebar.selectbox(
+        "Select notebook",
+        options=notebook_ids,
+        format_func=lambda notebook_id: notebook_names[notebook_id],
+        index=notebook_ids.index(
+            st.session_state.selected_notebook
+        )
+    )
 
-elif export_range == "Weekly":
-    start_date = today - timedelta(days=today.weekday())
-    end_date = start_date + timedelta(days=6)
-
-elif export_range == "Monthly":
-    start_date = today.replace(day=1)
-
-    next_month = (
-        today.replace(day=28) + timedelta(days=4)
-    ).replace(day=1)
-
-    end_date = next_month - timedelta(days=1)
+    st.session_state.selected_notebook = selected_notebook
 
 else:
-    if notes:
-        start_date = datetime.strptime(
-            min(notes.keys()),
-            "%Y-%m-%d"
-        ).date()
+    st.sidebar.info("No notebooks yet.")
+    selected_notebook = None
 
-        end_date = datetime.strptime(
-            max(notes.keys()),
-            "%Y-%m-%d"
-        ).date()
+
+with st.sidebar.expander("Create notebook"):
+    new_notebook_name = st.text_input(
+        "Notebook name",
+        key="new_notebook_name"
+    )
+
+    if st.button(
+        "Create notebook",
+        use_container_width=True
+    ):
+        notebook_id = create_notebook(
+            user_id,
+            new_notebook_name
+        )
+
+        if notebook_id:
+            st.session_state.selected_notebook = notebook_id
+            st.success("Notebook created.")
+            st.rerun()
+
+
+if selected_notebook:
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Sections")
+
+    sections = get_sections(selected_notebook)
+
+    section_names = {
+        section_id: section_name
+        for section_id, section_name in sections
+    }
+
+    if sections:
+        section_ids = list(section_names.keys())
+
+        if (
+            st.session_state.selected_section not in section_ids
+        ):
+            st.session_state.selected_section = section_ids[0]
+
+        selected_section = st.sidebar.selectbox(
+            "Select section",
+            options=section_ids,
+            format_func=lambda section_id: section_names[section_id],
+            index=section_ids.index(
+                st.session_state.selected_section
+            )
+        )
+
+        st.session_state.selected_section = selected_section
+
     else:
-        start_date = today
-        end_date = today
+        st.sidebar.info("No sections yet.")
+        selected_section = None
 
-pdf_data = generate_pdf(
-    st.session_state.username,
-    notes,
-    start_date,
-    end_date
+    with st.sidebar.expander("Create section"):
+        new_section_name = st.text_input(
+            "Section name",
+            key="new_section_name"
+        )
+
+        if st.button(
+            "Create section",
+            use_container_width=True
+        ):
+            section_id = create_section(
+                selected_notebook,
+                new_section_name
+            )
+
+            if section_id:
+                st.session_state.selected_section = section_id
+                st.success("Section created.")
+                st.rerun()
+
+
+# =========================================================
+# MAIN APPLICATION
+# =========================================================
+
+if not selected_notebook or not selected_section:
+
+    st.title("My Notebook")
+    st.info(
+        "Create a notebook and a section from the sidebar to begin."
+    )
+    st.stop()
+
+
+# =========================================================
+# PAGE LIST
+# =========================================================
+
+pages = get_pages(selected_section)
+
+page_map = {
+    page_id: title
+    for page_id, title, updated_at in pages
+}
+
+if pages:
+    page_ids = list(page_map.keys())
+
+    if st.session_state.selected_page not in page_ids:
+        st.session_state.selected_page = page_ids[0]
+
+else:
+    new_page_id = create_page(
+        selected_section,
+        "Welcome Page"
+    )
+
+    st.session_state.selected_page = new_page_id
+    st.rerun()
+
+
+with st.sidebar:
+
+    st.markdown("---")
+    st.subheader("Pages")
+
+    for page_id, title, updated_at in pages:
+        label = title or "Untitled Page"
+
+        if st.button(
+            label,
+            key=f"page_button_{page_id}",
+            use_container_width=True
+        ):
+            st.session_state.selected_page = page_id
+            st.rerun()
+
+    if st.button(
+        "New page",
+        use_container_width=True
+    ):
+        new_page_id = create_page(
+            selected_section,
+            "Untitled Page"
+        )
+
+        if new_page_id:
+            st.session_state.selected_page = new_page_id
+            st.rerun()
+
+
+# =========================================================
+# PAGE CONTENT
+# =========================================================
+
+page = get_page(st.session_state.selected_page)
+
+if not page:
+    st.error("Page not found.")
+    st.stop()
+
+page_id = page[0]
+page_title = page[2]
+page_content = page[3]
+
+
+# =========================================================
+# TOP BAR
+# =========================================================
+
+top_col1, top_col2, top_col3 = st.columns(
+    [5, 1, 1]
 )
 
-st.sidebar.download_button(
-    label=f"Download {export_range} PDF",
-    data=pdf_data,
-    file_name=(
-        f"calendar_notes_"
-        f"{start_date}_{end_date}.pdf"
-    ),
-    mime="application/pdf",
-    use_container_width=True
+with top_col1:
+    st.title(page_title)
+
+with top_col2:
+    if st.button("Save"):
+        st.session_state.save_page_clicked = True
+
+with top_col3:
+    if st.button("Delete"):
+        delete_page(page_id)
+        st.session_state.selected_page = None
+        st.rerun()
+
+
+# =========================================================
+# EDITOR
+# =========================================================
+
+title_input = st.text_input(
+    "Page title",
+    value=page_title,
+    key=f"title_input_{page_id}"
 )
 
-# ---------------------------------------------------------
+content_input = st.text_area(
+    "Page content",
+    value=page_content,
+    height=450,
+    key=f"content_input_{page_id}",
+    placeholder=(
+        "Write your page here...\n\n"
+        "Examples:\n"
+        "**Bold text**\n"
+        "==Yellow highlight==\n"
+        "!!Red highlight!!\n"
+        "##Green highlight##"
+    )
+)
+
+
+format_col1, format_col2, format_col3, format_col4 = st.columns(4)
+
+with format_col1:
+    if st.button("Add bold"):
+        st.session_state[f"content_input_{page_id}"] = (
+            f"**{content_input}**"
+        )
+        st.rerun()
+
+with format_col2:
+    if st.button("Yellow"):
+        st.session_state[f"content_input_{page_id}"] = highlight_text(
+            content_input,
+            "Yellow"
+        )
+        st.rerun()
+
+with format_col3:
+    if st.button("Red"):
+        st.session_state[f"content_input_{page_id}"] = highlight_text(
+            content_input,
+            "Red"
+        )
+        st.rerun()
+
+with format_col4:
+    if st.button("Green"):
+        st.session_state[f"content_input_{page_id}"] = highlight_text(
+            content_input,
+            "Green"
+        )
+        st.rerun()
+
+
+if st.session_state.get("save_page_clicked", False):
+    if save_page(
+        page_id,
+        title_input,
+        content_input
+    ):
+        st.session_state.save_page_clicked = False
+        st.success("Page saved.")
+        st.rerun()
+
+
+# =========================================================
+# PREVIEW
+# =========================================================
+
+st.subheader("Preview")
+
+preview_html = note_to_html(content_input)
+
+st.markdown(
+    f"""
+    <div class="note-preview">
+        {preview_html}
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+
+# =========================================================
+# PDF EXPORT
+# =========================================================
+
+st.markdown("---")
+st.subheader("Export")
+
+export_col1, export_col2 = st.columns(2)
+
+with export_col1:
+    page_pdf = build_page_pdf(
+        username,
+        title_input,
+        content_input
+    )
+
+    st.download_button(
+        "Download current page PDF",
+        data=page_pdf,
+        file_name="page.pdf",
+        mime="application/pdf",
+        use_container_width=True
+    )
+
+with export_col2:
+    section_pages = get_pages(selected_section)
+    section_pdf = build_section_pdf(
+        username,
+        section_names[selected_section],
+        section_pages
+    )
+
+    st.download_button(
+        "Download section PDF",
+        data=section_pdf,
+        file_name="section.pdf",
+        mime="application/pdf",
+        use_container_width=True
+    )
+
+
+# =========================================================
+# SEARCH
+# =========================================================
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("Search")
+
+search_term = st.sidebar.text_input(
+    "Search pages",
+    key="search_term"
+)
+
+if search_term.strip():
+    results = search_pages(
+        user_id,
+        search_term.strip()
+    )
+
+    if results:
+        st.sidebar.markdown("Search results:")
+
+        for result_page_id, result_title, result_section, result_notebook in results:
+            if st.sidebar.button(
+                f"{result_title} - {result_section}",
+                key=f"search_result_{result_page_id}",
+                use_container_width=True
+            ):
+                st.session_state.selected_page = result_page_id
+                st.rerun()
+    else:
+        st.sidebar.caption("No pages found.")
+
+
+# =========================================================
 # LOGOUT
-# ---------------------------------------------------------
+# =========================================================
+
+st.sidebar.markdown("---")
 
 if st.sidebar.button(
     "Logout",
     use_container_width=True
 ):
-    st.session_state.authenticated = False
-    st.session_state.user_id = None
-    st.session_state.username = None
-
-    st.query_params.clear()
+    st.session_state.user = None
+    st.session_state.selected_notebook = None
+    st.session_state.selected_section = None
+    st.session_state.selected_page = None
     st.rerun()
-
-st.sidebar.markdown("---")
-st.sidebar.caption("© 2026 timothymarkbal-e")
-
-
-# =========================================================
-# MAIN INTERFACE
-# =========================================================
-
-query_date = st.query_params.get(
-    "edit_date",
-    None
-)
-
-default_date = today
-
-if query_date:
-    try:
-        default_date = datetime.strptime(
-            query_date,
-            "%Y-%m-%d"
-        ).date()
-    except ValueError:
-        default_date = today
-
-column_editor, column_calendar = st.columns(
-    [1, 3],
-    gap="large"
-)
-
-
-# =========================================================
-# NOTE EDITOR
-# =========================================================
-
-with column_editor:
-
-    st.subheader("Note Editor")
-
-    active_date = st.date_input(
-        "Select date",
-        value=default_date
-    )
-
-    active_date_string = str(active_date)
-    note_state_key = f"note_{active_date_string}"
-
-    if note_state_key not in st.session_state:
-        st.session_state[note_state_key] = notes.get(
-            active_date_string,
-            ""
-        )
-
-    st.info(
-        """
-        Formatting shortcuts:
-
-        `**text**` = bold
-
-        `==text==` = yellow highlight
-
-        `!!text!!` = red highlight
-
-        `##text##` = green highlight
-        """
-    )
-
-    highlight_color = st.selectbox(
-        "Highlight color",
-        ["Yellow", "Red", "Green"],
-        key=f"highlight_color_{active_date_string}"
-    )
-
-    note_text = st.text_area(
-        f"Notes for {active_date_string}",
-        height=400,
-        key=note_state_key,
-        placeholder=(
-            "Write your note here...\n\n"
-            "Example:\n"
-            "**Project meeting**\n"
-            "==Important deadline==\n"
-            "!!Urgent task!!\n"
-            "##Ideas##"
-        )
-    )
-
-    button_col1, button_col2 = st.columns(2)
-
-    with button_col1:
-        if st.button(
-            "Highlight note",
-            use_container_width=True
-        ):
-            st.session_state[note_state_key] = add_highlight(
-                note_text,
-                highlight_color
-            )
-            st.rerun()
-
-    with button_col2:
-        if st.button(
-            "Remove formatting",
-            use_container_width=True
-        ):
-            st.session_state[note_state_key] = remove_formatting(
-                note_text
-            )
-            st.rerun()
-
-    st.subheader("Preview")
-
-    preview_text = st.session_state[note_state_key]
-    preview_html = format_note_html(preview_text)
-
-    st.markdown(
-        f"""
-        <div class="note-preview">
-            {preview_html}
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    save_col, delete_col = st.columns(2)
-
-    with save_col:
-        if st.button(
-            "Save Note",
-            use_container_width=True
-        ):
-            if save_note(
-                st.session_state.user_id,
-                active_date_string,
-                st.session_state[note_state_key]
-            ):
-                st.query_params.clear()
-                st.success("Note saved.")
-                st.rerun()
-
-    with delete_col:
-        if st.button(
-            "Delete Note",
-            use_container_width=True
-        ):
-            if delete_note(
-                st.session_state.user_id,
-                active_date_string
-            ):
-                st.session_state[note_state_key] = ""
-                st.query_params.clear()
-                st.success("Note deleted.")
-                st.rerun()
-
-    if query_date:
-        if st.button(
-            "Clear date selection",
-            use_container_width=True
-        ):
-            st.query_params.clear()
-            st.rerun()
-
-
-# =========================================================
-# CALENDAR
-# =========================================================
-
-with column_calendar:
-    st.subheader("Calendar")
-    create_calendar(notes)
-
-
-# =========================================================
-# FOOTER
-# =========================================================
-
-st.markdown("---")
-
-st.markdown(
-    '<div class="app-footer">© 2026 timothymarkbal-e</div>',
-    unsafe_allow_html=True
-)
