@@ -1,6 +1,6 @@
 streamlit
+streamlit-quill
 psycopg2-binary
 python-dotenv
-weasyprint
-streamlit-quill
 bleach
+weasyprint
