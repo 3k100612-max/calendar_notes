@@ -1,4 +1,3 @@
-import base64
 import os
 import re
 from html import escape
@@ -6,6 +5,7 @@ from html import escape
 import bleach
 import psycopg2
 import streamlit as st
+from bleach.css_sanitizer import CSSSanitizer
 from dotenv import load_dotenv
 from streamlit_quill import st_quill
 from weasyprint import HTML
@@ -23,7 +23,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
 
 # =========================================================
 # HTML AND IMAGE SANITIZATION
@@ -55,21 +54,50 @@ ALLOWED_TAGS = [
 
 
 ALLOWED_ATTRIBUTES = {
+    "*": [
+        "class",
+        "style",
+    ],
     "a": [
         "href",
         "target",
         "rel",
-    ],
-    "span": [
-        "style",
     ],
     "img": [
         "src",
         "alt",
         "width",
         "height",
+        "class",
+        "style",
     ],
 }
+
+
+ALLOWED_PROTOCOLS = [
+    "http",
+    "https",
+    "mailto",
+    "data",
+]
+
+
+CSS_SANITIZER = CSSSanitizer(
+    allowed_css_properties=[
+        "color",
+        "background",
+        "background-color",
+        "text-align",
+        "margin-left",
+        "padding-left",
+        "font-size",
+        "font-family",
+        "font-weight",
+        "font-style",
+        "text-decoration",
+        "white-space",
+    ]
+)
 
 
 ALLOWED_IMAGE_TYPES = (
@@ -85,8 +113,7 @@ def remove_unsafe_images(content):
     """
     Keep only Base64 embedded images.
 
-    External image URLs are removed so that pasted content
-    cannot load arbitrary remote resources.
+    External image URLs are removed.
     """
 
     if not content:
@@ -98,22 +125,22 @@ def remove_unsafe_images(content):
     )
 
     def replace_image(match):
-        prefix = match.group(1)
         source = match.group(2)
-        suffix = match.group(3)
 
         if source.lower().startswith(ALLOWED_IMAGE_TYPES):
-            return prefix + source + suffix
+            return match.group(0)
 
         return ""
 
-    return image_pattern.sub(replace_image, content)
+    return image_pattern.sub(
+        replace_image,
+        content,
+    )
 
 
 def clean_html(content):
     """
-    Sanitize Quill HTML while preserving rich-text formatting
-    and pasted Base64 images.
+    Sanitize Quill HTML while preserving rich-text formatting.
     """
 
     content = content or ""
@@ -122,12 +149,8 @@ def clean_html(content):
     cleaner = bleach.Cleaner(
         tags=ALLOWED_TAGS,
         attributes=ALLOWED_ATTRIBUTES,
-        protocols=[
-            "http",
-            "https",
-            "mailto",
-            "data",
-        ],
+        protocols=ALLOWED_PROTOCOLS,
+        css_sanitizer=CSS_SANITIZER,
         strip=True,
     )
 
@@ -167,7 +190,11 @@ def content_size_mb(content):
     if not content:
         return 0
 
-    return len(content.encode("utf-8")) / (1024 * 1024)
+    return len(
+        content.encode("utf-8")
+    ) / (1024 * 1024)
+
+
 
 
 # =========================================================
@@ -262,11 +289,58 @@ st.markdown(
             color: #888888;
             margin-top: 35px;
             padding: 15px;
+            font-size: 14px;
+            line-height: 1.6;
         }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+
+        .page-preview .ql-align-center {
+            text-align: center;
+        }
+
+        .page-preview .ql-align-right {
+            text-align: right;
+        }
+        
+        .page-preview .ql-align-justify {
+            text-align: justify;
+        }
+        
+        .page-preview [class*="ql-indent-"] {
+            padding-left: 3em;
+        }
+        
+        .page-preview .ql-size-small {
+            font-size: 0.75em;
+        }
+        
+        .page-preview .ql-size-large {
+            font-size: 1.5em;
+        }
+        
+        .page-preview .ql-size-huge {
+            font-size: 2.5em;
+        }
+        
+        .page-preview strong {
+            font-weight: 700;
+        }
+        
+        .page-preview em {
+            font-style: italic;
+        }
+        
+        .page-preview u {
+            text-decoration: underline;
+        }
+        
+        .page-preview s {
+            text-decoration: line-through;
+        }
+        
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 # =========================================================
@@ -744,9 +818,15 @@ def create_page(section_id, title="Untitled Page"):
 
 
 def save_page(page_id, title, content):
-    content = clean_html(content)
+    """
+    Save the title and sanitized Quill HTML.
+    """
 
-    # Maximum page size: 10 MB
+    content = clean_html(
+        content
+    )
+
+    # Maximum page size: 10 MB.
     if content_size_mb(content) > 10:
         st.error(
             "This page is larger than 10 MB. "
@@ -755,7 +835,9 @@ def save_page(page_id, title, content):
         return False
 
     title = (title or "").strip()
-    title = title or "Untitled Page"
+
+    if not title:
+        title = "Untitled Page"
 
     conn = get_connection()
 
@@ -792,7 +874,9 @@ def save_page(page_id, title, content):
 
     except Exception as error:
         conn.rollback()
-        st.error(f"Could not save page: {error}")
+        st.error(
+            f"Could not save page: {error}"
+        )
         return False
 
     finally:
@@ -800,6 +884,7 @@ def save_page(page_id, title, content):
             cur.close()
 
         conn.close()
+
 
 
 def delete_page(page_id):
@@ -1020,12 +1105,22 @@ def pdf_css():
     .section-page:last-child {
         page-break-after: auto;
     }
+    .pdf-footer {
+    position: fixed;
+    bottom: -12mm;
+    left: 0;
+    right: 0;
+    text-align: center;
+    color: #777777;
+    font-size: 9pt;
+    }
     """
-
 
 def build_page_pdf(username, title, content):
     safe_username = escape(username or "")
-    safe_title = escape(title or "Untitled Page")
+    safe_title = escape(
+        title or "Untitled Page"
+    )
     safe_content = clean_html(content)
 
     document = f"""
@@ -1047,11 +1142,17 @@ def build_page_pdf(username, title, content):
         <div class="rich-content">
             {safe_content or "<p>No content.</p>"}
         </div>
+
+        <div class="pdf-footer">
+            @timothymarkbale2026
+        </div>
     </body>
     </html>
     """
 
-    return HTML(string=document).write_pdf()
+    return HTML(
+        string=document
+    ).write_pdf()
 
 
 def build_section_pdf(username, section_name, pages):
@@ -1090,6 +1191,9 @@ def build_section_pdf(username, section_name, pages):
 
             <div class="rich-content">
                 {safe_content or "<p>No content.</p>"}
+            </div>
+            <div class="pdf-footer">
+                @timothymarkbale2026
             </div>
         </section>
         """
@@ -1495,8 +1599,8 @@ title_input = st.text_input(
 
 st.caption(
     "Use the toolbar to format text. "
-    "You can paste images directly into the editor. "
-    "Pasted images are stored inside the page content."
+    "Bold, colors, highlights, lists, alignment, and images "
+    "will be saved with the page."
 )
 
 content_input = st_quill(
@@ -1507,6 +1611,7 @@ content_input = st_quill(
     key=f"quill_editor_{page_id}",
 )
 
+# Sanitize the HTML while preserving formatting.
 safe_content_input = clean_html(
     content_input
 )
@@ -1542,7 +1647,7 @@ if st.button(
         safe_content_input,
     ):
         st.success(
-            "Page and embedded images saved successfully."
+            "Page saved successfully with formatting and images."
         )
         st.rerun()
     else:
@@ -1686,8 +1791,10 @@ if st.sidebar.button(
 st.markdown(
     """
     <div class="footer">
-        My Notebook
+        <div>My Notebook</div>
+        <div>@timothymarkbale2026</div>
     </div>
     """,
     unsafe_allow_html=True,
 )
+
