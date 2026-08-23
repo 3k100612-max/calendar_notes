@@ -337,30 +337,34 @@ st.markdown(
             text-decoration: line-through;
         }
 
-        /* Make the Streamlit Quill component taller */
-        div[data-testid="stCustomComponentV1"] iframe {
-            min-height: 700px !important;
-            height: 700px !important;
-            border-radius: 10px;
-        }
-
-        /* Give the editor component some breathing room */
+        /* Large Quill editor */
         div[data-testid="stCustomComponentV1"] {
-            min-height: 700px !important;
-            margin-bottom: 18px;
+        width: 100% !important;
+        min-height: 800px !important;
+        margin-bottom: 20px;
         }
 
-        /* Improve the editor area on smaller screens */
+
+        div[data-testid="stCustomComponentV1"] iframe {
+        width: 100% !important;
+        height: 800px !important;
+        min-height: 800px !important;
+        border: none !important;
+        overflow: hidden !important;
+        }
+
+    /* Responsive height for tablets and phones */
         @media (max-width: 900px) {
-            div[data-testid="stCustomComponentV1"] iframe {
-                min-height: 550px !important;
-                height: 550px !important;
-            }
-
-            div[data-testid="stCustomComponentV1"] {
-                min-height: 550px !important;
-            }
+        div[data-testid="stCustomComponentV1"] {
+        min-height: 600px !important;
         }
+
+        div[data-testid="stCustomComponentV1"] iframe {
+        height: 600px !important;
+        min-height: 600px !important;
+        }
+    }
+
 
         /* Improve buttons below the editor */
         .editor-action-area {
