@@ -336,6 +336,48 @@ st.markdown(
         .page-preview s {
             text-decoration: line-through;
         }
+
+        /* Make the Streamlit Quill component taller */
+        div[data-testid="stCustomComponentV1"] iframe {
+            min-height: 700px !important;
+            height: 700px !important;
+            border-radius: 10px;
+        }
+
+        /* Give the editor component some breathing room */
+        div[data-testid="stCustomComponentV1"] {
+            min-height: 700px !important;
+            margin-bottom: 18px;
+        }
+
+        /* Improve the editor area on smaller screens */
+        @media (max-width: 900px) {
+            div[data-testid="stCustomComponentV1"] iframe {
+                min-height: 550px !important;
+                height: 550px !important;
+            }
+
+            div[data-testid="stCustomComponentV1"] {
+                min-height: 550px !important;
+            }
+        }
+
+        /* Improve buttons below the editor */
+        .editor-action-area {
+            margin-top: 10px;
+            padding: 12px;
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            background-color: #f9fafb;
+        }
+
+        /* Editor information text */
+        .editor-help {
+            color: #6b7280;
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+
         
             </style>
             """,
@@ -1597,10 +1639,14 @@ title_input = st.text_input(
     key=f"title_input_{page_id}",
 )
 
-st.caption(
-    "Use the toolbar to format text. "
-    "Bold, colors, highlights, lists, alignment, and images "
-    "will be saved with the page."
+st.markdown(
+    """
+    <div class="editor-help">
+        Use the toolbar to format your page. You can paste images directly
+        into the editor. Changes are saved when you click Save page.
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
 content_input = st_quill(
@@ -1624,11 +1670,43 @@ page_size = content_size_mb(
     safe_content_input
 )
 
-if image_count > 0:
-    st.info(
-        f"{image_count} embedded image(s) detected. "
-        f"Page size: {page_size:.2f} MB."
-    )
+# Calculate basic text statistics.
+plain_text = re.sub(
+    r"<[^>]+>",
+    " ",
+    safe_content_input,
+)
+
+plain_text = re.sub(
+    r"\s+",
+    " ",
+    plain_text,
+).strip()
+
+word_count = (
+    len(plain_text.split())
+    if plain_text
+    else 0
+)
+
+character_count = len(plain_text)
+
+# Display editor information.
+info_col1, info_col2, info_col3 = st.columns(3)
+
+with info_col1:
+    st.caption(f"Words: {word_count:,}")
+
+with info_col2:
+    st.caption(f"Characters: {character_count:,}")
+
+with info_col3:
+    if image_count > 0:
+        st.caption(
+            f"Images: {image_count} | Size: {page_size:.2f} MB"
+        )
+    else:
+        st.caption("Images: 0")
 
 if page_size > 8:
     st.warning(
@@ -1636,11 +1714,41 @@ if page_size > 8:
         "Consider resizing images before saving."
     )
 
-if st.button(
-    "Save page",
-    type="primary",
-    use_container_width=True,
-):
+# Editor actions.
+st.markdown(
+    '<div class="editor-action-area">',
+    unsafe_allow_html=True,
+)
+
+save_col, clear_col = st.columns([5, 1])
+
+with save_col:
+    save_clicked = st.button(
+        "Save page",
+        type="primary",
+        use_container_width=True,
+        key=f"save_page_{page_id}",
+    )
+
+with clear_col:
+    clear_clicked = st.button(
+        "Clear",
+        use_container_width=True,
+        key=f"clear_page_{page_id}",
+    )
+
+st.markdown(
+    "</div>",
+    unsafe_allow_html=True,
+)
+
+if clear_clicked:
+    st.warning(
+        "To clear the page, select all content in the editor "
+        "and press Backspace or Delete."
+    )
+
+if save_clicked:
     if save_page(
         page_id,
         title_input,
@@ -1654,7 +1762,6 @@ if st.button(
         st.error(
             "Could not save the page."
         )
-
 
 # =========================================================
 # PREVIEW
