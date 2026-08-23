@@ -337,34 +337,79 @@ st.markdown(
             text-decoration: line-through;
         }
 
-        /* Large Quill editor */
-        div[data-testid="stCustomComponentV1"] {
-        width: 100% !important;
-        min-height: 800px !important;
-        margin-bottom: 20px;
-        }
+                /* =====================================================
+           QUILL EDITOR LAYOUT
+           ===================================================== */
 
+        /*
+           st_quill renders inside an iframe.
+           These rules resize the outer Streamlit component and
+           iframe without hiding overflowing content.
+        */
+
+        div[data-testid="stCustomComponentV1"] {
+            width: 100% !important;
+            min-height: 850px !important;
+            height: 850px !important;
+            margin-bottom: 20px !important;
+            overflow: visible !important;
+        }
 
         div[data-testid="stCustomComponentV1"] iframe {
-        width: 100% !important;
-        height: 800px !important;
-        min-height: 800px !important;
-        border: none !important;
-        overflow: hidden !important;
+            display: block !important;
+            width: 100% !important;
+            height: 850px !important;
+            min-height: 850px !important;
+            border: 1px solid #d1d5db !important;
+            border-radius: 10px !important;
+            overflow: visible !important;
         }
 
-    /* Responsive height for tablets and phones */
+        /*
+           Responsive editor height for smaller screens.
+        */
+
         @media (max-width: 900px) {
-        div[data-testid="stCustomComponentV1"] {
-        min-height: 600px !important;
+            div[data-testid="stCustomComponentV1"] {
+                min-height: 650px !important;
+                height: 650px !important;
+            }
+
+            div[data-testid="stCustomComponentV1"] iframe {
+                height: 650px !important;
+                min-height: 650px !important;
+            }
         }
 
-        div[data-testid="stCustomComponentV1"] iframe {
-        height: 600px !important;
-        min-height: 600px !important;
-        }
-    }
+        @media (max-width: 600px) {
+            div[data-testid="stCustomComponentV1"] {
+                min-height: 500px !important;
+                height: 500px !important;
+            }
 
+            div[data-testid="stCustomComponentV1"] iframe {
+                height: 500px !important;
+                min-height: 500px !important;
+            }
+        }
+
+        /* =====================================================
+           EDITOR HELP AND ACTION AREA
+           ===================================================== */
+
+        .editor-help {
+            color: #6b7280;
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+
+        .editor-action-area {
+            margin-top: 12px;
+            padding: 12px;
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            background-color: #f9fafb;
+        }
 
         /* Improve buttons below the editor */
         .editor-action-area {
@@ -373,13 +418,6 @@ st.markdown(
             border: 1px solid #e5e7eb;
             border-radius: 10px;
             background-color: #f9fafb;
-        }
-
-        /* Editor information text */
-        .editor-help {
-            color: #6b7280;
-            font-size: 14px;
-            margin-bottom: 8px;
         }
 
         
@@ -1631,8 +1669,6 @@ with header_col2:
             st.error(
                 "Could not delete the page."
             )
-
-
 # =========================================================
 # RICH-TEXT EDITOR
 # =========================================================
@@ -1666,6 +1702,7 @@ safe_content_input = clean_html(
     content_input
 )
 
+# Count embedded images and page size.
 image_count = count_embedded_images(
     safe_content_input
 )
@@ -1674,7 +1711,7 @@ page_size = content_size_mb(
     safe_content_input
 )
 
-# Calculate basic text statistics.
+# Convert the HTML into simple plain text for statistics.
 plain_text = re.sub(
     r"<[^>]+>",
     " ",
@@ -1695,19 +1732,24 @@ word_count = (
 
 character_count = len(plain_text)
 
-# Display editor information.
+# Display page statistics.
 info_col1, info_col2, info_col3 = st.columns(3)
 
 with info_col1:
-    st.caption(f"Words: {word_count:,}")
+    st.caption(
+        f"Words: {word_count:,}"
+    )
 
 with info_col2:
-    st.caption(f"Characters: {character_count:,}")
+    st.caption(
+        f"Characters: {character_count:,}"
+    )
 
 with info_col3:
     if image_count > 0:
         st.caption(
-            f"Images: {image_count} | Size: {page_size:.2f} MB"
+            f"Images: {image_count} | "
+            f"Size: {page_size:.2f} MB"
         )
     else:
         st.caption("Images: 0")
@@ -1718,13 +1760,15 @@ if page_size > 8:
         "Consider resizing images before saving."
     )
 
-# Editor actions.
+# Editor action area.
 st.markdown(
     '<div class="editor-action-area">',
     unsafe_allow_html=True,
 )
 
-save_col, clear_col = st.columns([5, 1])
+save_col, clear_col = st.columns(
+    [5, 1]
+)
 
 with save_col:
     save_clicked = st.button(
@@ -1748,8 +1792,8 @@ st.markdown(
 
 if clear_clicked:
     st.warning(
-        "To clear the page, select all content in the editor "
-        "and press Backspace or Delete."
+        "To clear the page, click inside the editor, "
+        "press Ctrl+A, and then press Backspace."
     )
 
 if save_clicked:
@@ -1766,6 +1810,7 @@ if save_clicked:
         st.error(
             "Could not save the page."
         )
+
 
 # =========================================================
 # PREVIEW
