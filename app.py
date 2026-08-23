@@ -337,89 +337,64 @@ st.markdown(
             text-decoration: line-through;
         }
 
-                /* =====================================================
+        /* =====================================================
            QUILL EDITOR LAYOUT
            ===================================================== */
 
         /*
            st_quill renders inside an iframe.
-           These rules resize the outer Streamlit component and
-           iframe without hiding overflowing content.
+           These rules size the outer Streamlit component and
+           iframe, and let overflowing content scroll instead
+           of spilling past the box.
         */
-
+        
         div[data-testid="stCustomComponentV1"] {
             width: 100% !important;
-            min-height: 850px !important;
-            height: 850px !important;
+            min-height: 500px !important;
+            height: min(850px, 75vh) !important;
+            max-height: 850px !important;
             margin-bottom: 20px !important;
-            overflow: visible !important;
+            overflow-y: auto !important;
+            overflow-x: hidden !important;
         }
-
+        
         div[data-testid="stCustomComponentV1"] iframe {
             display: block !important;
             width: 100% !important;
-            height: 850px !important;
-            min-height: 850px !important;
+            height: 100% !important;
+            min-height: 500px !important;
             border: 1px solid #d1d5db !important;
             border-radius: 10px !important;
-            overflow: visible !important;
+            overflow: auto !important;
+            resize: vertical !important;
         }
-
+        
         /*
            Responsive editor height for smaller screens.
         */
-
+        
         @media (max-width: 900px) {
             div[data-testid="stCustomComponentV1"] {
-                min-height: 650px !important;
-                height: 650px !important;
+                min-height: 400px !important;
+                height: min(650px, 70vh) !important;
             }
-
+        
             div[data-testid="stCustomComponentV1"] iframe {
-                height: 650px !important;
-                min-height: 650px !important;
+                min-height: 400px !important;
             }
         }
-
+        
         @media (max-width: 600px) {
             div[data-testid="stCustomComponentV1"] {
-                min-height: 500px !important;
-                height: 500px !important;
+                min-height: 350px !important;
+                height: min(500px, 65vh) !important;
             }
-
+        
             div[data-testid="stCustomComponentV1"] iframe {
-                height: 500px !important;
-                min-height: 500px !important;
+                min-height: 350px !important;
             }
         }
-
-        /* =====================================================
-           EDITOR HELP AND ACTION AREA
-           ===================================================== */
-
-        .editor-help {
-            color: #6b7280;
-            font-size: 14px;
-            margin-bottom: 8px;
-        }
-
-        .editor-action-area {
-            margin-top: 12px;
-            padding: 12px;
-            border: 1px solid #e5e7eb;
-            border-radius: 10px;
-            background-color: #f9fafb;
-        }
-
-        /* Improve buttons below the editor */
-        .editor-action-area {
-            margin-top: 10px;
-            padding: 12px;
-            border: 1px solid #e5e7eb;
-            border-radius: 10px;
-            background-color: #f9fafb;
-        }
-
+              
         
             </style>
             """,
