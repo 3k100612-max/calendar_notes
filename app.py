@@ -691,6 +691,45 @@ def create_notebook(user_id, name):
         conn.close()
 
 
+def delete_notebook(notebook_id):
+    """
+    Delete a notebook. Cascades to its sections and pages
+    via ON DELETE CASCADE.
+    """
+
+    conn = get_connection()
+
+    if conn is None:
+        return False
+
+    cur = None
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            DELETE FROM notebooks
+            WHERE id = %s
+            """,
+            (notebook_id,),
+        )
+
+        conn.commit()
+        return cur.rowcount > 0
+
+    except Exception as error:
+        conn.rollback()
+        st.error(f"Could not delete notebook: {error}")
+        return False
+
+    finally:
+        if cur:
+            cur.close()
+
+        conn.close()
+
+
 def get_sections(notebook_id):
     conn = get_connection()
 
@@ -757,6 +796,45 @@ def create_section(notebook_id, name):
         conn.rollback()
         st.error(f"Could not create section: {error}")
         return None
+
+    finally:
+        if cur:
+            cur.close()
+
+        conn.close()
+
+
+def delete_section(section_id):
+    """
+    Delete a section. Cascades to its pages via
+    ON DELETE CASCADE.
+    """
+
+    conn = get_connection()
+
+    if conn is None:
+        return False
+
+    cur = None
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            DELETE FROM sections
+            WHERE id = %s
+            """,
+            (section_id,),
+        )
+
+        conn.commit()
+        return cur.rowcount > 0
+
+    except Exception as error:
+        conn.rollback()
+        st.error(f"Could not delete section: {error}")
+        return False
 
     finally:
         if cur:
@@ -1299,6 +1377,17 @@ if "selected_section" not in st.session_state:
 if "selected_page" not in st.session_state:
     st.session_state.selected_page = None
 
+# Track which item (page/section/notebook) is pending a
+# delete confirmation. None means nothing is pending.
+if "confirm_delete_page" not in st.session_state:
+    st.session_state.confirm_delete_page = None
+
+if "confirm_delete_section" not in st.session_state:
+    st.session_state.confirm_delete_section = None
+
+if "confirm_delete_notebook" not in st.session_state:
+    st.session_state.confirm_delete_notebook = None
+
 
 # =========================================================
 # LOGIN PAGE
@@ -1411,16 +1500,73 @@ if notebook_ids:
     if st.session_state.selected_notebook not in notebook_ids:
         st.session_state.selected_notebook = notebook_ids[0]
 
-    selected_notebook = st.sidebar.selectbox(
-        "Choose notebook",
-        notebook_ids,
-        format_func=lambda value: notebook_names[value],
-        index=notebook_ids.index(
-            st.session_state.selected_notebook
-        ),
+    notebook_select_col, notebook_delete_col = st.sidebar.columns(
+        [4, 1]
     )
 
+    with notebook_select_col:
+        selected_notebook = st.selectbox(
+            "Choose notebook",
+            notebook_ids,
+            format_func=lambda value: notebook_names[value],
+            index=notebook_ids.index(
+                st.session_state.selected_notebook
+            ),
+        )
+
     st.session_state.selected_notebook = selected_notebook
+
+    with notebook_delete_col:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button(
+            "🗑️",
+            key="delete_notebook_btn",
+            help="Delete this notebook",
+            use_container_width=True,
+        ):
+            st.session_state.confirm_delete_notebook = (
+                selected_notebook
+            )
+            st.rerun()
+
+    if (
+        st.session_state.confirm_delete_notebook
+        == selected_notebook
+    ):
+        st.sidebar.warning(
+            f"Delete **{notebook_names[selected_notebook]}**? "
+            "This also deletes all of its sections and pages, "
+            "and cannot be undone."
+        )
+
+        nb_confirm_col, nb_cancel_col = st.sidebar.columns(2)
+
+        with nb_confirm_col:
+            if st.button(
+                "Delete",
+                key="confirm_delete_notebook_btn",
+                type="primary",
+                use_container_width=True,
+            ):
+                if delete_notebook(selected_notebook):
+                    st.session_state.selected_notebook = None
+                    st.session_state.selected_section = None
+                    st.session_state.selected_page = None
+                    st.session_state.confirm_delete_notebook = None
+                    st.rerun()
+                else:
+                    st.sidebar.error(
+                        "Could not delete the notebook."
+                    )
+
+        with nb_cancel_col:
+            if st.button(
+                "Cancel",
+                key="cancel_delete_notebook_btn",
+                use_container_width=True,
+            ):
+                st.session_state.confirm_delete_notebook = None
+                st.rerun()
 
 else:
     selected_notebook = None
@@ -1465,16 +1611,72 @@ if selected_notebook:
         if st.session_state.selected_section not in section_ids:
             st.session_state.selected_section = section_ids[0]
 
-        selected_section = st.sidebar.selectbox(
-            "Choose section",
-            section_ids,
-            format_func=lambda value: section_names[value],
-            index=section_ids.index(
-                st.session_state.selected_section
-            ),
+        section_select_col, section_delete_col = st.sidebar.columns(
+            [4, 1]
         )
 
+        with section_select_col:
+            selected_section = st.selectbox(
+                "Choose section",
+                section_ids,
+                format_func=lambda value: section_names[value],
+                index=section_ids.index(
+                    st.session_state.selected_section
+                ),
+            )
+
         st.session_state.selected_section = selected_section
+
+        with section_delete_col:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button(
+                "🗑️",
+                key="delete_section_btn",
+                help="Delete this section",
+                use_container_width=True,
+            ):
+                st.session_state.confirm_delete_section = (
+                    selected_section
+                )
+                st.rerun()
+
+        if (
+            st.session_state.confirm_delete_section
+            == selected_section
+        ):
+            st.sidebar.warning(
+                f"Delete **{section_names[selected_section]}**? "
+                "This also deletes all of its pages, "
+                "and cannot be undone."
+            )
+
+            sec_confirm_col, sec_cancel_col = st.sidebar.columns(2)
+
+            with sec_confirm_col:
+                if st.button(
+                    "Delete",
+                    key="confirm_delete_section_btn",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    if delete_section(selected_section):
+                        st.session_state.selected_section = None
+                        st.session_state.selected_page = None
+                        st.session_state.confirm_delete_section = None
+                        st.rerun()
+                    else:
+                        st.sidebar.error(
+                            "Could not delete the section."
+                        )
+
+            with sec_cancel_col:
+                if st.button(
+                    "Cancel",
+                    key="cancel_delete_section_btn",
+                    use_container_width=True,
+                ):
+                    st.session_state.confirm_delete_section = None
+                    st.rerun()
 
     else:
         selected_section = None
@@ -1637,13 +1839,41 @@ with header_col2:
         "Delete page",
         use_container_width=True,
     ):
-        if delete_page(page_id):
-            st.session_state.selected_page = None
+        st.session_state.confirm_delete_page = page_id
+        st.rerun()
+
+if st.session_state.confirm_delete_page == page_id:
+    st.warning(
+        f"Delete **{page_title}**? This can't be undone."
+    )
+
+    page_confirm_col, page_cancel_col = st.columns(2)
+
+    with page_confirm_col:
+        if st.button(
+            "Yes, delete it",
+            type="primary",
+            use_container_width=True,
+            key=f"confirm_delete_page_{page_id}",
+        ):
+            if delete_page(page_id):
+                st.session_state.selected_page = None
+                st.session_state.confirm_delete_page = None
+                st.rerun()
+            else:
+                st.error(
+                    "Could not delete the page."
+                )
+
+    with page_cancel_col:
+        if st.button(
+            "Cancel",
+            use_container_width=True,
+            key=f"cancel_delete_page_{page_id}",
+        ):
+            st.session_state.confirm_delete_page = None
             st.rerun()
-        else:
-            st.error(
-                "Could not delete the page."
-            )
+
 # =========================================================
 # RICH-TEXT EDITOR
 # =========================================================
@@ -1928,4 +2158,3 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
